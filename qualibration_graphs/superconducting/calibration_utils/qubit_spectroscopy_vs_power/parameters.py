@@ -57,16 +57,6 @@ class NodeSpecificParameters(RunnableParameters):
     Minimum acceptable peak height as a fraction of the difference.
     """
 
-    baseline_iq_abs_v: float = 0.0
-    """
-    Baseline IQ amplitude (in volts) to subtract before analysis.
-    """
-    
-    max_iq_abs_v: float = 1.0
-    """
-    Maximum expected IQ amplitude (in volts) for sanity checks.
-    """
-
 
 
 class Parameters(

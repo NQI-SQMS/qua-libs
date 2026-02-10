@@ -19,17 +19,14 @@ def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
       - Add full RF frequency coordinate
     """
 
-    # Convert I/Q to Volts
     ds = convert_IQ_to_V(ds, node.namespace["qubits"])
 
-    # Add IQ_abs and IQ_phase
     ds = add_amplitude_and_phase(
         ds,
         dim="detuning",
         subtract_slope_flag=True,
     )
 
-    # Build full RF frequency coordinate
     full_freq = np.array(
         [
             ds.detuning + q.xy.RF_frequency
@@ -108,13 +105,37 @@ def fit_raw_data(
     """
 
     p = node.parameters
+    machine = node.machine
 
     # --------------------------------------------------
-    # Minimum acceptable peak height
+    # Build per-qubit baseline and max IQ from QUAM
+    # --------------------------------------------------
+    qubit_names = ds.qubit.values
+
+    baseline_iq_abs_v = xr.DataArray(
+        [
+            machine.resonator_amplitudes[q]["min_amplitude"]
+            for q in qubit_names
+        ],
+        dims=["qubit"],
+        coords={"qubit": qubit_names},
+    )
+
+    max_iq_abs_v = xr.DataArray(
+        [
+            machine.resonator_amplitudes[q]["max_amplitude"]
+            for q in qubit_names
+        ],
+        dims=["qubit"],
+        coords={"qubit": qubit_names},
+    )
+
+    # --------------------------------------------------
+    # Minimum acceptable peak height (per qubit)
     # --------------------------------------------------
     min_peak_height = (
         p.min_peak_fraction
-        * (p.max_iq_abs_v - p.baseline_iq_abs_v)
+        * (max_iq_abs_v - baseline_iq_abs_v)
     )
 
     # --------------------------------------------------
@@ -123,7 +144,7 @@ def fit_raw_data(
     peak_index = xr.apply_ufunc(
         _peak_index,
         ds.IQ_abs,
-        p.baseline_iq_abs_v,
+        baseline_iq_abs_v,
         min_peak_height,
         input_core_dims=[["detuning"], [], []],
         vectorize=True,
@@ -150,7 +171,7 @@ def fit_raw_data(
     }
 
     # --------------------------------------------------
-    # Linewidth (FWHM) around detected peak
+    # Linewidth (FWHM)
     # --------------------------------------------------
     linewidth = xr.apply_ufunc(
         _compute_fwhm_around_peak,
@@ -195,10 +216,32 @@ def fit_raw_data(
     # Rough qubit frequency at selected power
     # --------------------------------------------------
     def _peak_frequency(full_freq, iq_abs, power, target_power):
-        idx = int(np.nanargmin(np.abs(power - target_power)))
+        # If no valid power was selected, fail gracefully
+        if np.isnan(target_power):
+            return np.nan
+
+        power = np.asarray(power)
+        iq_abs = np.asarray(iq_abs)
+        full_freq = np.asarray(full_freq)
+
+        # Guard against all-NaN power arrays
+        if np.all(np.isnan(power)):
+            return np.nan
+
+        # Find closest power index safely
+        diff = np.abs(power - target_power)
+        if np.all(np.isnan(diff)):
+            return np.nan
+
+        idx = int(np.nanargmin(diff))
+
         spectrum = iq_abs[idx]
+        if np.all(np.isnan(spectrum)):
+            return np.nan
+
         peak_idx = int(np.nanargmax(spectrum))
         return full_freq[peak_idx]
+
 
     rough_freq = xr.apply_ufunc(
         _peak_frequency,

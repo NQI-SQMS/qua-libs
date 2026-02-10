@@ -15,6 +15,8 @@ class FitParameters:
 
     frequency: float
     fwhm: float
+    min_amplitude: float
+    max_amplitude: float
     success: bool
 
 
@@ -71,35 +73,79 @@ def fit_raw_data(ds: xr.Dataset, node: QualibrationNode) -> Tuple[xr.Dataset, di
     # Fit the resonator line
     fit_results = peaks_dips(ds.IQ_abs, "detuning")
     # Extract the relevant fitted parameters
-    fit_data, fit_results = _extract_relevant_fit_parameters(fit_results, node)
+    fit_data, fit_results = _extract_relevant_fit_parameters(fit_results, ds, node)
     return fit_data, fit_results
 
 
-def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
-    """Add metadata to the dataset and fit results."""
-    # Add metadata to fit results
+def _extract_relevant_fit_parameters(
+    fit: xr.Dataset,
+    ds: xr.Dataset,
+    node: QualibrationNode,
+):
+    """Add metadata to the dataset and extract fit results."""
+
+    # ------------------
+    # Frequency metadata
+    # ------------------
     fit.attrs = {"long_name": "frequency", "units": "Hz"}
-    # Get the fitted resonator frequency
+
     full_freq = np.array([q.resonator.RF_frequency for q in node.namespace["qubits"]])
     res_freq = fit.position + full_freq
+
     fit = fit.assign_coords(res_freq=("qubit", res_freq.data))
     fit.res_freq.attrs = {"long_name": "resonator frequency", "units": "Hz"}
-    # Get the fitted FWHM
+
+    # -----
+    # FWHM
+    # -----
     fwhm = np.abs(fit.width)
     fit = fit.assign_coords(fwhm=("qubit", fwhm.data))
     fit.fwhm.attrs = {"long_name": "resonator fwhm", "units": "Hz"}
-    # Assess whether the fit was successful or not
-    freq_success = np.abs(res_freq.data) < node.parameters.frequency_span_in_mhz * 1e6 + full_freq
-    fwhm_success = np.abs(fwhm.data) < node.parameters.frequency_span_in_mhz * 1e6 + full_freq
+
+    # -------------------------------
+    # Amplitude extraction (ABS(IQ))
+    # -------------------------------
+    # IMPORTANT: use RAW dataset, not fit dataset
+    iq_abs = ds.IQ_abs  # already in Volts after convert_IQ_to_V
+
+    min_amp = iq_abs.min(dim="detuning")
+    max_amp = iq_abs.max(dim="detuning")
+
+    fit = fit.assign_coords(
+        min_amplitude=("qubit", min_amp.data),
+        max_amplitude=("qubit", max_amp.data),
+    )
+
+    fit.min_amplitude.attrs = {"units": "V", "long_name": "min |IQ|"}
+    fit.max_amplitude.attrs = {"units": "V", "long_name": "max |IQ|"}
+
+    # ------------------
+    # Success criteria
+    # ------------------
+    freq_success = (
+        np.abs(res_freq.data)
+        < node.parameters.frequency_span_in_mhz * 1e6 + full_freq
+    )
+    fwhm_success = (
+        np.abs(fwhm.data)
+        < node.parameters.frequency_span_in_mhz * 1e6 + full_freq
+    )
+
     success_criteria = freq_success & fwhm_success
     fit = fit.assign_coords(success=("qubit", success_criteria))
 
+    # ------------------
+    # Results dictionary
+    # ------------------
     fit_results = {
-        q: FitParameters(
-            frequency=fit.sel(qubit=q).res_freq.values.__float__(),
-            fwhm=fit.sel(qubit=q).fwhm.values.__float__(),
-            success=fit.sel(qubit=q).success.values.__bool__(),
-        )
+        q: {
+            "frequency": fit.sel(qubit=q).res_freq.values.item(),
+            "fwhm": fit.sel(qubit=q).fwhm.values.item(),
+            "min_amplitude": fit.sel(qubit=q).min_amplitude.values.item(),
+            "max_amplitude": fit.sel(qubit=q).max_amplitude.values.item(),
+            "success": bool(fit.sel(qubit=q).success.values),
+        }
         for q in fit.qubit.values
     }
+
     return fit, fit_results

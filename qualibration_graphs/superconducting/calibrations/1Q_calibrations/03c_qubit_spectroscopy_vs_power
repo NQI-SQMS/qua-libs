@@ -14,8 +14,6 @@ from qualang_tools.units import unit
 from qualibrate import QualibrationNode
 from quam_config import Quam
 
-from quam_builder.tools.power_tools import calculate_voltage_scaling_factor
-
 from calibration_utils.qubit_spectroscopy_vs_power import (
     Parameters,
     process_raw_dataset,
@@ -65,19 +63,17 @@ node = QualibrationNode[Parameters, Quam](
 
 @node.run_action(skip_if=node.modes.external)
 def custom_param(node: QualibrationNode[Parameters, Quam]):
-    node.parameters.qubits = ["q1"]
-    node.parameters.frequency_span_in_mhz = 200
-    node.parameters.frequency_step_in_mhz = 1
-    node.parameters.num_power_points = 10
-    node.parameters.num_shots = 100
-    node.parameters.min_power_dbm = -80
-    node.parameters.max_power_dbm = 0
-    node.parameters.operation = "saturation"
-    node.parameters.operation_len_in_ns = 200_000
-    node.parameters.max_amplitude_opx = 0.4
-    node.parameters.min_peak_fraction = 0.1
-    node.parameters.baseline_iq_abs_v = 0.006
-    node.parameters.max_iq_abs_v = 0.011
+    # node.parameters.frequency_span_in_mhz = 200
+    # node.parameters.frequency_step_in_mhz = 1
+    # node.parameters.num_power_points = 10
+    # node.parameters.num_shots = 100
+    # node.parameters.min_power_dbm = -80
+    # node.parameters.max_power_dbm = 0
+    # node.parameters.operation = "saturation"
+    # node.parameters.operation_len_in_ns = 200_000
+    # node.parameters.max_amplitude_opx = 0.3
+    # node.parameters.min_peak_fraction = 0.3
+    pass
 
 
 node.machine = Quam.load()
@@ -304,9 +300,9 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                     operation="x180",
                 )
 
-            # -----------------------------
-            # Update qubit frequency
-            # -----------------------------
+            # # -----------------------------
+            # # Update qubit frequency
+            # # -----------------------------
             qubit.xy.RF_frequency = selected_freq
             qubit.f_01 = selected_freq
 

@@ -207,13 +207,29 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def update_state(node: QualibrationNode[Parameters, Quam]):
     """Update the relevant parameters if the qubit data analysis was successful."""
+    machine = node.machine  # this is your Quam instance
+
+    # Ensure the container exists
+    if machine.resonator_amplitudes is None:
+        machine.resonator_amplitudes = {}
+
     with node.record_state_updates():
         for q in node.namespace["qubits"]:
             if node.outcomes[q.name] == "failed":
                 continue
 
-            q.resonator.f_01 = float(node.results["fit_results"][q.name]["frequency"])
-            q.resonator.RF_frequency = float(node.results["fit_results"][q.name]["frequency"])
+            results = node.results["fit_results"][q.name]
+
+            # --- Standard resonator updates ---
+            freq = float(results["frequency"])
+            q.resonator.f_01 = freq
+            q.resonator.RF_frequency = freq
+
+            # --- Store abs(IQ) amplitudes in Volts at QUAM level ---
+            machine.resonator_amplitudes[q.name] = {
+                "min_amplitude": float(results["min_amplitude"]),
+                "max_amplitude": float(results["max_amplitude"]),
+            }
 
 
 # %% {Save_results}
