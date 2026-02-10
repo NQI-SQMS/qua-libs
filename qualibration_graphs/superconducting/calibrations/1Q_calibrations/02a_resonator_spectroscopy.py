@@ -101,6 +101,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 with for_(*from_array(df, dfs)):
                     for i, qubit in multiplexed_qubits.items():
                         rr = qubit.resonator
+                        rr.operations['readout'].length = 8_000
                         # Update the resonator frequencies for all resonators
                         rr.update_frequency(df + rr.intermediate_frequency)
                         # Measure the resonator
@@ -177,7 +178,8 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
     """Analyse the raw data and store the fitted data in another xarray dataset "ds_fit" and the fitted results in the "fit_results" dictionary."""
     node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
     node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
-    node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}
+    node.results["fit_results"] = fit_results
+
 
     # Log the relevant information extracted from the data analysis
     log_fitted_results(node.results["fit_results"], log_callable=node.log)
@@ -230,7 +232,6 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 "min_amplitude": float(results["min_amplitude"]),
                 "max_amplitude": float(results["max_amplitude"]),
             }
-
 
 # %% {Save_results}
 @node.run_action()
