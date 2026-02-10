@@ -102,7 +102,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     for i, qubit in multiplexed_qubits.items():
                         rr = qubit.resonator
                         # Update the resonator frequencies for all resonators
-                        rr.update_frequency(df)
+                        rr.update_frequency(df + rr.intermediate_frequency)
                         # Measure the resonator
                         rr.measure("readout", qua_vars=(I[i], Q[i]))
                         # wait for the resonator to deplete
@@ -213,8 +213,16 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             if node.outcomes[q.name] == "failed":
                 continue
 
-            q.resonator.f_01 = float(node.results["fit_results"][q.name]["frequency"])
-            q.resonator.RF_frequency = float(node.results["fit_results"][q.name]["frequency"])
+            res = node.results["fit_results"][q.name]
+
+            # Safety check (should already be guaranteed by success)
+            if not res["success"] or not res["frequencies"]:
+                continue
+
+            freq = float(res["frequencies"][0])
+
+            q.resonator.f_01 = freq
+            q.resonator.RF_frequency = freq
 
 
 # %% {Save_results}

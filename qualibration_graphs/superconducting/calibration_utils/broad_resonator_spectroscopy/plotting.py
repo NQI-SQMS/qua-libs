@@ -96,29 +96,35 @@ def plot_individual_amplitude_with_fit(
     if fitted_data is not None:
         ax2.plot(ds.detuning / u.MHz, fitted_data / u.mV, "r--", linewidth=1)
 
-    # ---- Plot chosen resonator frequency (SINGLE RED DOT) ----
-    if fit is not None and "res_freq" in fit and "success" in fit:
-        try:
-            if bool(fit["success"].values):
-                full_freq = np.asarray(ds.full_freq.values).ravel()
+    # ---- Plot selected resonator frequency ----
+    try:
+        qubit_name = qubit["qubit"]
 
-                raw = ds.loc[qubit].IQ_abs.values
-                raw = np.asarray(raw).squeeze().ravel()   # <-- CRITICAL FIX
+        # Map qubit name → index
+        q_index = list(ds.coords["qubit"].values).index(qubit_name)
 
-                f_chosen = float(np.asarray(fit["res_freq"].values).squeeze())
+        # Data
+        full_freq = ds.full_freq.values[q_index].ravel()
+        raw = ds.IQ_abs.values[q_index].ravel()
 
-                # interpolate magnitude at fitted frequency
-                y_at_pos = np.interp(f_chosen, full_freq, raw) / u.mV
+        # Fit result (scalar per qubit)
+        f_chosen = float(fit.res_freq.values)
 
-                ax.scatter(
-                    f_chosen / u.GHz,
-                    y_at_pos,
-                    s=30,
-                    c="red",
-                    marker="o",
-                    zorder=20,
-                )
+        if not np.isnan(f_chosen):
+            y_at_pos = np.interp(f_chosen, full_freq, raw) / u.mV
 
-        except Exception as e:
-            print(f"[plot] failed to plot red dot for {qubit}: {e}")
+            ax.scatter(
+                f_chosen / u.GHz,
+                y_at_pos,
+                s=25,
+                c="red",
+                zorder=20,
+            )
+
+    except Exception as e:
+        print(f"[plot] failed to plot red dot for {qubit}: {e}")
+
+
+
+
 
