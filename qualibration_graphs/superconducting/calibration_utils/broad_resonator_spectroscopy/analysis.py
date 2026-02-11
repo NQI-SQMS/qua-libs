@@ -17,7 +17,7 @@ from qualibration_libs.data import add_amplitude_and_phase, convert_IQ_to_V
 @dataclass
 class FitParameters:
     """Stores the relevant resonator spectroscopy experiment fit parameters for a single qubit"""
-    frequencies: List[float]
+    frequency: List[float]
     success: bool
 
 
@@ -34,9 +34,9 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
 
     for q in fit_results.keys():
         s_qubit = f"Results for qubit {q}: "
-        s_freq = "Detected resonator frequencies: "
-        for f in fit_results[q]["frequencies"]:
-            s_freq += f"{1e-9 * f:.3f} GHz, "
+        s_freq = "Detected resonator frequency: "
+        f = fit_results[q]["frequency"]
+        s_freq += f"{1e-9 * f:.3f} GHz, "
         s_freq += "\t"
 
         if fit_results[q]["success"]:
@@ -76,7 +76,7 @@ def fit_raw_data(
     node: QualibrationNode,
 ) -> Tuple[xr.Dataset, Dict[str, FitParameters]]:
     """
-    Detect resonator dips and select the one closest to the LO frequency.
+    Detect resonator dips and select the one closest to the initial resonator frequency.
     """
 
     fit_results = peaks_dips_all(
@@ -114,7 +114,7 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
         f_guess, coords={"qubit": qubit_names}, dims=("qubit",)
     )
 
-    # Absolute frequencies of all detected dips
+    # Absolute frequency of all detected dips
     res_freq_da = fit.positions + f_guess_da
     res_freq_da.attrs = {"long_name": "resonator frequency", "units": "Hz"}
 
@@ -125,7 +125,7 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
     # Does each qubit have at least one dip?
     has_any_dip = dist_da.notnull().any(dim="dip")
 
-    # SAFE argmin (critical fix)
+    # SAFE argmin
     safe_dist = dist_da.fillna(np.inf)
     closest_idx = safe_dist.argmin(dim="dip")
 
@@ -153,12 +153,12 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
     for i, qname in enumerate(qubit_names):
         if success.values[i]:
             fit_results[qname] = FitParameters(
-                frequencies=[float(selected_freq.sel(qubit=qname).values)],
+                frequency=float(selected_freq.sel(qubit=qname).values),
                 success=True,
             )
         else:
             fit_results[qname] = FitParameters(
-                frequencies=[],
+                frequency=[],
                 success=False,
             )
 

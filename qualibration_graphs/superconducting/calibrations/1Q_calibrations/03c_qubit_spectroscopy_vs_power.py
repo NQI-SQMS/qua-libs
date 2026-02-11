@@ -217,16 +217,14 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def analyse_data(node: QualibrationNode[Parameters, Quam]):
     node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
-    ds_fit, fit_results = fit_raw_data(node.results["ds_raw"], node)
-
-    node.results["ds_fit"] = ds_fit
+    node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}
 
-    log_fitted_results(fit_results, log_callable=node.log)
-
+    # Log the relevant information extracted from the data analysis
+    log_fitted_results(node.results["fit_results"], log_callable=node.log)
     node.outcomes = {
-        q: ("successful" if r.success else "failed")
-        for q, r in fit_results.items()
+        qubit_name: ("successful" if fit_result["success"] else "failed")
+        for qubit_name, fit_result in node.results["fit_results"].items()
     }
 
 
@@ -252,67 +250,57 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
       - Qubit frequency
     """
 
-    ds = node.results["ds_fit"]
-    qubits = node.namespace["qubits"]
-
-    # ------------------------------------------------------------------
-    # Revert temporary sweep changes
-    # ------------------------------------------------------------------
     for tracked_qubit in node.namespace.get("tracked_qubits", []):
         tracked_qubit.revert_changes()
 
-    # ------------------------------------------------------------------
-    # Apply calibrated values
-    # ------------------------------------------------------------------
     with node.record_state_updates():
-        for qubit in qubits:
-            qname = qubit.name
-            ds_q = ds.sel(qubit=qname)
+        for q in node.namespace["qubits"]:
+            if node.outcomes[q.name] == "failed":
+                continue
 
             # -----------------------------
             # Selected power (dBm)
             # -----------------------------
-            selected_power_dbm = float(ds_q.selected_power)
-            
-            # -----------------------------
-            # Selected OPX amplitude
-            # -----------------------------
-            # selected_amp = float(ds_q.selected_amplitude_opx)
+            selected_power_dbm = node.results["fit_results"][q.name]["selected_power"]
 
             # -----------------------------
             # Selected qubit frequency (Hz)
             # -----------------------------
-            selected_freq = float(ds_q.rough_qubit_frequency)
+            selected_freq = node.results["fit_results"][q.name]["rough_qubit_frequency"]
 
             # -----------------------------
             # Update XY output power
             # -----------------------------
-            new_power_settings = qubit.xy.set_output_power(
+            new_power_settings = q.xy.set_output_power(
                 power_in_dbm=selected_power_dbm,
                 max_amplitude=node.parameters.max_amplitude_opx,
                 operation=node.parameters.operation,
             )
 
             if node.parameters.operation != "saturation":
-                new_power_settings = qubit.xy.set_output_power(
+                new_power_settings = q.xy.set_output_power(
                     power_in_dbm=selected_power_dbm,
                     max_amplitude=node.parameters.max_amplitude_opx,
                     operation="x180",
                 )
 
-            # # -----------------------------
-            # # Update qubit frequency
-            # # -----------------------------
-            qubit.xy.RF_frequency = selected_freq
-            qubit.f_01 = selected_freq
+            # -----------------------------
+            # Update qubit frequency
+            # -----------------------------
+            q.xy.RF_frequency = selected_freq
+            q.f_01 = selected_freq
 
+            # -----------------------------
+            # Logging
+            # -----------------------------
             node.log(
-                f"[{qname}] Updated state:\n"
+                f"[{q.name}] Updated state:\n"
                 f"  XY power          = {selected_power_dbm:.2f} dBm\n"
                 f"  Octave gain       = {new_power_settings['gain']:.2f} dBm\n"
-                f"  Pulse amplitude   = {new_power_settings['amplitude']:.2f} dBm\n"
+                f"  Pulse amplitude   = {new_power_settings['amplitude']:.2f}\n"
                 f"  Qubit frequency   = {selected_freq / 1e9:.6f} GHz"
             )
+
 
 
 

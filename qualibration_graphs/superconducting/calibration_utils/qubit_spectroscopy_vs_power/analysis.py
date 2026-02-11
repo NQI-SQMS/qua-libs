@@ -7,10 +7,6 @@ from qualibrate import QualibrationNode
 from qualibration_libs.data import add_amplitude_and_phase, convert_IQ_to_V
 
 
-# ----------------------------------------------------------------------
-# RAW DATA PROCESSING
-# ----------------------------------------------------------------------
-
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
     """
     Process raw qubit spectroscopy vs power dataset:
@@ -28,10 +24,7 @@ def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
     )
 
     full_freq = np.array(
-        [
-            ds.detuning + q.xy.RF_frequency
-            for q in node.namespace["qubits"]
-        ]
+        [ds.detuning + q.xy.RF_frequency for q in node.namespace["qubits"]]
     )
 
     ds = ds.assign_coords(
@@ -46,15 +39,7 @@ def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
     return ds
 
 
-# ----------------------------------------------------------------------
-# PEAK + LINEWIDTH ANALYSIS
-# ----------------------------------------------------------------------
-
 def _peak_index(iq_abs, baseline, min_height):
-    """
-    Return index of peak if it exceeds minimum height above baseline.
-    Otherwise return -1.
-    """
     y = np.asarray(iq_abs)
 
     if np.all(np.isnan(y)):
@@ -68,10 +53,6 @@ def _peak_index(iq_abs, baseline, min_height):
 
 
 def _compute_fwhm_around_peak(detuning, signal, peak_idx) -> float:
-    """
-    Compute FWHM around a known peak index.
-    Returns linewidth in Hz.
-    """
     if peak_idx < 0:
         return np.nan
 
@@ -92,55 +73,33 @@ def _compute_fwhm_around_peak(detuning, signal, peak_idx) -> float:
     return x[idx[-1]] - x[idx[0]]
 
 
-# ----------------------------------------------------------------------
-# MAIN FIT FUNCTION
-# ----------------------------------------------------------------------
-
 def fit_raw_data(
     ds: xr.Dataset,
     node: QualibrationNode,
 ) -> Tuple[xr.Dataset, Dict[str, "FitParameters"]]:
     """
-    Peak-based rough qubit spectroscopy analysis.
+    Peak-based rough qubit spectroscopy vs power analysis.
     """
 
     p = node.parameters
     machine = node.machine
 
-    # --------------------------------------------------
-    # Build per-qubit baseline and max IQ from QUAM
-    # --------------------------------------------------
     qubit_names = ds.qubit.values
 
     baseline_iq_abs_v = xr.DataArray(
-        [
-            machine.resonator_amplitudes[q]["min_amplitude"]
-            for q in qubit_names
-        ],
+        [machine.resonator_amplitudes[q]["min_amplitude"] for q in qubit_names],
         dims=["qubit"],
         coords={"qubit": qubit_names},
     )
 
     max_iq_abs_v = xr.DataArray(
-        [
-            machine.resonator_amplitudes[q]["max_amplitude"]
-            for q in qubit_names
-        ],
+        [machine.resonator_amplitudes[q]["max_amplitude"] for q in qubit_names],
         dims=["qubit"],
         coords={"qubit": qubit_names},
     )
 
-    # --------------------------------------------------
-    # Minimum acceptable peak height (per qubit)
-    # --------------------------------------------------
-    min_peak_height = (
-        p.min_peak_fraction
-        * (max_iq_abs_v - baseline_iq_abs_v)
-    )
+    min_peak_height = p.min_peak_fraction * (max_iq_abs_v - baseline_iq_abs_v)
 
-    # --------------------------------------------------
-    # Peak index vs power
-    # --------------------------------------------------
     peak_index = xr.apply_ufunc(
         _peak_index,
         ds.IQ_abs,
@@ -152,27 +111,13 @@ def fit_raw_data(
     )
 
     ds["peak_index"] = peak_index
-    ds.peak_index.attrs = {
-        "long_name": "Detected peak index",
-    }
 
-    # --------------------------------------------------
-    # Peak height
-    # --------------------------------------------------
     ds["peak_height"] = xr.where(
         peak_index >= 0,
         ds.IQ_abs.isel(detuning=peak_index),
         np.nan,
     )
 
-    ds.peak_height.attrs = {
-        "long_name": "Peak height above baseline",
-        "units": "V",
-    }
-
-    # --------------------------------------------------
-    # Linewidth (FWHM)
-    # --------------------------------------------------
     linewidth = xr.apply_ufunc(
         _compute_fwhm_around_peak,
         ds.detuning,
@@ -184,22 +129,12 @@ def fit_raw_data(
     )
 
     ds["linewidth"] = linewidth
-    ds.linewidth.attrs = {
-        "long_name": "Spectroscopy linewidth (FWHM)",
-        "units": "Hz",
-    }
 
-    # --------------------------------------------------
-    # Valid power mask
-    # --------------------------------------------------
     valid_power = (
-        (ds.peak_index >= 0) &
-        (ds.linewidth < p.linewidth_threshold_hz)
+        (ds.peak_index >= 0)
+        & (ds.linewidth < p.linewidth_threshold_hz)
     )
 
-    # --------------------------------------------------
-    # Select highest safe power
-    # --------------------------------------------------
     selected_power = (
         ds.power.where(valid_power)
         .max(dim="power")
@@ -207,41 +142,23 @@ def fit_raw_data(
     )
 
     ds["selected_power"] = selected_power
-    ds.selected_power.attrs = {
-        "long_name": "Selected spectroscopy power",
-        "units": "dBm",
-    }
 
-    # --------------------------------------------------
-    # Rough qubit frequency at selected power
-    # --------------------------------------------------
     def _peak_frequency(full_freq, iq_abs, power, target_power):
-        # If no valid power was selected, fail gracefully
         if np.isnan(target_power):
             return np.nan
 
-        power = np.asarray(power)
-        iq_abs = np.asarray(iq_abs)
-        full_freq = np.asarray(full_freq)
-
-        # Guard against all-NaN power arrays
-        if np.all(np.isnan(power)):
-            return np.nan
-
-        # Find closest power index safely
         diff = np.abs(power - target_power)
         if np.all(np.isnan(diff)):
             return np.nan
 
         idx = int(np.nanargmin(diff))
-
         spectrum = iq_abs[idx]
+
         if np.all(np.isnan(spectrum)):
             return np.nan
 
         peak_idx = int(np.nanargmax(spectrum))
         return full_freq[peak_idx]
-
 
     rough_freq = xr.apply_ufunc(
         _peak_frequency,
@@ -260,24 +177,25 @@ def fit_raw_data(
     )
 
     ds["rough_qubit_frequency"] = rough_freq
-    ds.rough_qubit_frequency.attrs = {
-        "long_name": "Rough qubit frequency",
-        "units": "Hz",
-    }
 
-    # --------------------------------------------------
-    # Dummy fit results (pipeline compatibility)
-    # --------------------------------------------------
     fit_results = {
-        q.name: FitParameters(success=True)
-        for q in node.namespace["qubits"]
+        q: FitParameters(
+            selected_power=ds.sel(qubit=q).selected_power.values.__float__(),
+            rough_qubit_frequency=ds.sel(qubit=q).rough_qubit_frequency.values.__float__(),
+            linewidth=ds.sel(qubit=q).linewidth.min(dim="power").values.__float__(),
+            success=bool(
+                np.isfinite(ds.sel(qubit=q).selected_power)
+                and np.isfinite(ds.sel(qubit=q).rough_qubit_frequency)
+            ),
+        )
+        for q in ds.qubit.values
     }
 
     return ds, fit_results
 
 
 def log_fitted_results(*args, **kwargs):
-    """No-op logger."""
+    #TODO
     return
 
 
@@ -287,4 +205,9 @@ def log_fitted_results(*args, **kwargs):
 
 @dataclass
 class FitParameters:
-    success: bool = False
+    """Spectroscopy vs power fit results for a single qubit"""
+
+    selected_power: float
+    rough_qubit_frequency: float
+    linewidth: float
+    success: bool

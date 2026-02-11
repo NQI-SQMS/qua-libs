@@ -110,11 +110,15 @@ def fit_raw_data(
     # Decision rule
     shift_threshold = node.parameters.frequency_shift_threshold_in_hz
 
+    large_shift = np.abs(freq_shift) > shift_threshold
+
+    # If shift is too large → punch-out detected → choose LOW power
     optimal_power = xr.where(
-        np.abs(freq_shift) > shift_threshold,
+        large_shift,
         P_low,
         P_high,
     )
+
 
     ds_fit = ds.assign_coords(
         freq_shift=("qubit", freq_shift.data),
@@ -162,8 +166,9 @@ def _extract_relevant_fit_parameters(
     shift_threshold = node.parameters.frequency_shift_threshold_in_hz
     punchout_detected = np.abs(fit.freq_shift) > shift_threshold
 
-    # --- Final success flag ---
-    success = freq_span_ok & nan_ok & punchout_detected
+    # Success = data valid + frequency reasonable
+    success = freq_span_ok & nan_ok
+
 
     fit = fit.assign_coords(success=("qubit", success.data))
 

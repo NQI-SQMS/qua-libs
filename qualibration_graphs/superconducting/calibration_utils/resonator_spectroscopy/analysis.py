@@ -105,7 +105,6 @@ def _extract_relevant_fit_parameters(
     # -------------------------------
     # Amplitude extraction (ABS(IQ))
     # -------------------------------
-    # IMPORTANT: use RAW dataset, not fit dataset
     iq_abs = ds.IQ_abs  # already in Volts after convert_IQ_to_V
 
     min_amp = iq_abs.min(dim="detuning")
@@ -134,17 +133,14 @@ def _extract_relevant_fit_parameters(
     success_criteria = freq_success & fwhm_success
     fit = fit.assign_coords(success=("qubit", success_criteria))
 
-    # ------------------
-    # Results dictionary
-    # ------------------
     fit_results = {
-        q: {
-            "frequency": fit.sel(qubit=q).res_freq.values.item(),
-            "fwhm": fit.sel(qubit=q).fwhm.values.item(),
-            "min_amplitude": fit.sel(qubit=q).min_amplitude.values.item(),
-            "max_amplitude": fit.sel(qubit=q).max_amplitude.values.item(),
-            "success": bool(fit.sel(qubit=q).success.values),
-        }
+        q: FitParameters(
+            frequency=fit.sel(qubit=q).res_freq.values.item(),
+            fwhm=fit.sel(qubit=q).fwhm.values.item(),
+            min_amplitude=fit.sel(qubit=q).min_amplitude.values.item(),
+            max_amplitude=fit.sel(qubit=q).max_amplitude.values.item(),
+            success=bool(fit.sel(qubit=q).success.values),
+        )
         for q in fit.qubit.values
     }
 

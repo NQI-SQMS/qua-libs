@@ -260,8 +260,8 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 max_amplitude=node.parameters.max_amp,
             )
             # Update the readout frequency for the given flux point
-            q.resonator.f_01 += node.results["fit_results"][q.name]["frequency_shift"]
-            q.resonator.RF_frequency += node.results["fit_results"][q.name]["frequency_shift"]
+            q.resonator.f_01 -= node.results["fit_results"][q.name]["frequency_shift"]
+            q.resonator.RF_frequency -= node.results["fit_results"][q.name]["frequency_shift"]
 
 
 # %% {Save_results}

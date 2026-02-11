@@ -216,10 +216,10 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             res = node.results["fit_results"][q.name]
 
             # Safety check (should already be guaranteed by success)
-            if not res["success"] or not res["frequencies"]:
+            if not res["success"] or not res["frequency"]:
                 continue
 
-            freq = float(res["frequencies"][0])
+            freq = float(res["frequency"])
 
             q.resonator.f_01 = freq
             q.resonator.RF_frequency = freq
