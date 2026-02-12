@@ -51,6 +51,8 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, node.namespace["qubits"])
+        # Add amplitude and phase for IQ_abs calculation
+        ds = add_amplitude_and_phase(ds, "amp_prefactor", subtract_slope_flag=True)
 
     if node.name == "13_power_rabi_ef":
         full_amp = np.array([ds.amp_prefactor * q.xy.operations["EF_x180"].amplitude for q in node.namespace["qubits"]])
@@ -60,8 +62,7 @@ def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
         )
     ds = ds.assign_coords(full_amp=(["qubit", "amp_prefactor"], full_amp))
     ds.full_amp.attrs = {"long_name": "pulse amplitude", "units": "V"}
-    if node.name == "13_power_rabi_ef" and hasattr(ds, "I"):
-        ds = add_amplitude_and_phase(ds, "amp_prefactor", subtract_slope_flag=True)
+
     return ds
 
 
@@ -89,10 +90,8 @@ def fit_raw_data(ds: xr.Dataset, node: QualibrationNode) -> Tuple[xr.Dataset, di
         if node.parameters.use_state_discrimination:
             fit_vals = fit_oscillation(ds_fit.state, "amp_prefactor")
         else:
-            if node.name == "13_power_rabi_ef":
-                fit_vals = fit_oscillation(ds_fit.IQ_abs, "amp_prefactor")
-            else:
-                fit_vals = fit_oscillation(ds_fit.I, "amp_prefactor")
+            # Always fit over IQ_abs (magnitude) instead of just I component
+            fit_vals = fit_oscillation(ds_fit.IQ_abs, "amp_prefactor")
 
         ds_fit = xr.merge([ds, fit_vals.rename("fit")])
     else:
@@ -101,7 +100,8 @@ def fit_raw_data(ds: xr.Dataset, node: QualibrationNode) -> Tuple[xr.Dataset, di
         if node.parameters.use_state_discrimination:
             ds_fit["data_mean"] = ds.state.mean(dim="nb_of_pulses")
         else:
-            ds_fit["data_mean"] = ds.I.mean(dim="nb_of_pulses")
+            # Use IQ_abs (magnitude) instead of just I component
+            ds_fit["data_mean"] = ds.IQ_abs.mean(dim="nb_of_pulses")
         if (ds.nb_of_pulses.data[0] % 2 == 0 and operation == "x180") or (
             ds.nb_of_pulses.data[0] % 2 != 0 and operation != "x180"
         ):
@@ -119,10 +119,50 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
     limits = [instrument_limits(q.xy) for q in node.namespace["qubits"]]
     max_pulses = getattr(node.parameters, "max_number_pulses_per_sweep", 1)
     operation = getattr(node.parameters, "operation", "EF_x180" if node.name == "13_power_rabi_ef" else "x180")
+
+    # Get resonator amplitude range for each qubit
+    qubit_names = fit.qubit.values
+    min_resonator_amp = xr.DataArray(
+        [node.machine.resonator_amplitudes[q]["min_amplitude"] for q in qubit_names],
+        dims=["qubit"],
+        coords={"qubit": qubit_names},
+    )
+    max_resonator_amp = xr.DataArray(
+        [node.machine.resonator_amplitudes[q]["max_amplitude"] for q in qubit_names],
+        dims=["qubit"],
+        coords={"qubit": qubit_names},
+    )
+    expected_max_rabi_amp = (max_resonator_amp - min_resonator_amp) / 2
+
     if max_pulses == 1:
         # Process the fit parameters to get the right amplitude
-        phase = fit.fit.sel(fit_vals="phi") - np.pi * (fit.fit.sel(fit_vals="phi") > np.pi / 2)
-        factor = (np.pi - phase) / (2 * np.pi * fit.fit.sel(fit_vals="f"))
+        # Generate the fitted sinusoid and find its first maximum directly
+        from qualibration_libs.analysis import oscillation
+
+        # Reconstruct fitted curve for each qubit and find maximum
+        factors = []
+        for q in fit.qubit.values:
+            fit_q = fit.sel(qubit=q)
+            amp_q = fit_q.fit.sel(fit_vals="a").item()
+            freq_q = fit_q.fit.sel(fit_vals="f").item()
+            phase_q = fit_q.fit.sel(fit_vals="phi").item()
+            offset_q = fit_q.fit.sel(fit_vals="offset").item()
+
+            # Generate fitted curve for this qubit
+            fitted_curve_q = oscillation(
+                fit.amp_prefactor.values,
+                amp_q,
+                freq_q,
+                phase_q,
+                offset_q
+            )
+
+            # Find the amplitude prefactor at maximum
+            max_idx = np.argmax(fitted_curve_q)
+            factor_q = fit.amp_prefactor.values[max_idx]
+            factors.append(factor_q)
+
+        factor = xr.DataArray(factors, dims="qubit", coords={"qubit": fit.qubit})
         fit = fit.assign({"opt_amp_prefactor": factor})
         fit.opt_amp_prefactor.attrs = {
             "long_name": "factor to get a pi pulse",
@@ -154,9 +194,23 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
         }
 
     # Assess whether the fit was successful or not
+    # Check 1: No NaN values in fitted parameters
     nan_success = np.isnan(fit.opt_amp_prefactor) | np.isnan(fit.opt_amp)
+
+    # Check 2: Amplitude within instrument limits
     amp_success = fit.opt_amp < limits[0].max_x180_wf_amplitude
-    success_criteria = ~nan_success & amp_success
+
+    # Check 3: Rabi oscillation amplitude is at least 50% of expected maximum
+    # (based on resonator amplitude range from previous calibrations)
+    if max_pulses == 1:
+        rabi_amplitude = fit.fit.sel(fit_vals="a")  # Fitted oscillation amplitude
+        min_expected_rabi_amp = 0.2 * expected_max_rabi_amp
+        rabi_amp_sufficient = rabi_amplitude >= min_expected_rabi_amp
+    else:
+        # For multiple pulses, we don't have the oscillation fit, so skip this check
+        rabi_amp_sufficient = True
+
+    success_criteria = ~nan_success & amp_success & rabi_amp_sufficient
     fit = fit.assign({"success": success_criteria})
     # Populate the FitParameters class with fitted values
     fit_results = {

@@ -7,7 +7,7 @@ import xarray as xr
 
 from qualibrate import QualibrationNode
 from qualibration_libs.data import add_amplitude_and_phase, convert_IQ_to_V
-from qualibration_libs.analysis import peaks_dips
+# from qualibration_libs.analysis import peaks_dips  # Not used - now finding min values directly
 
 
 # =========================
@@ -89,15 +89,11 @@ def fit_raw_data(
     for q in node.namespace["qubits"]:
         name = q.name
 
-        f0 = peaks_dips(
-            ds.sel(qubit=name, power=P_low).IQ_abs,
-            "detuning",
-        ).position.item()
+        low_power_data = ds.sel(qubit=name, power=P_low).IQ_abs
+        high_power_data = ds.sel(qubit=name, power=P_high).IQ_abs
 
-        f1 = peaks_dips(
-            ds.sel(qubit=name, power=P_high).IQ_abs,
-            "detuning",
-        ).position.item()
+        f0 = low_power_data.detuning[low_power_data.argmin(dim="detuning")].item()
+        f1 = high_power_data.detuning[high_power_data.argmin(dim="detuning")].item()
 
         freq_low.append(f0)
         freq_high.append(f1)
@@ -135,43 +131,34 @@ def fit_raw_data(
 def _extract_relevant_fit_parameters(
     fit: xr.Dataset, node: QualibrationNode
 ):
+    """Extract fit parameters and determine success based on punch-out detection."""
 
+    # Calculate absolute resonator frequency from shift and base frequency
     base_freq = np.array(
         [q.resonator.RF_frequency for q in node.namespace["qubits"]]
     )
-
     res_freq = fit.freq_shift + base_freq
 
-    fit = fit.assign_coords(
-        res_freq=("qubit", res_freq.data)
-    )
-
+    fit = fit.assign_coords(res_freq=("qubit", res_freq.data))
     fit.res_freq.attrs = {
         "long_name": "resonator frequency",
         "units": "Hz",
     }
 
-    # --- Validity checks ---
-    freq_span_ok = (
-        np.abs(fit.freq_shift)
-        < node.parameters.frequency_span_in_mhz * 1e6
-    )
+    # Data validity checks
+    no_nans = ~(np.isnan(fit.freq_shift.data) | np.isnan(fit.optimal_power.data))
+    freq_in_range = np.abs(fit.freq_shift) < node.parameters.frequency_span_in_mhz * 1e6
 
-    nan_ok = ~(
-        np.isnan(fit.freq_shift.data)
-        | np.isnan(fit.optimal_power.data)
-    )
-
-    # --- Punch-out detection ---
+    # Punch-out detection: shift must be above threshold
     shift_threshold = node.parameters.frequency_shift_threshold_in_hz
     punchout_detected = np.abs(fit.freq_shift) > shift_threshold
 
-    # Success = data valid + frequency reasonable
-    success = freq_span_ok & nan_ok
-
+    # Success requires: valid data AND punch-out detected
+    success = no_nans & freq_in_range & punchout_detected
 
     fit = fit.assign_coords(success=("qubit", success.data))
 
+    # Build results dictionary
     fit_results = {
         q: FitParameters(
             success=bool(fit.sel(qubit=q).success),
