@@ -1,3 +1,3 @@
-from .my_quam import Quam, TemporaryCalibrationData
+from .my_quam import Quam, TemporaryCalibrationData, CavityTransmonPair
 
-__all__ = ["Quam", "TemporaryCalibrationData"]
+__all__ = ["Quam", "TemporaryCalibrationData", "CavityTransmonPair"]

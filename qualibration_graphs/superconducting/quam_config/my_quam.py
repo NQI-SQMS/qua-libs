@@ -1,55 +1,99 @@
-from typing import Dict, Any, List, Optional
-from quam.core import quam_dataclass, QuamBase
+from dataclasses import field
+from typing import Any, Dict, List, Optional
+
+from quam.core import QuamBase, quam_dataclass
 from quam_builder.architecture.superconducting.qpu import FixedFrequencyQuam
+from quam_builder.architecture.superconducting.cavity.cavity import Cavity
+from quam_builder.architecture.superconducting.qubit_pair import CavityTransmonPair
 
 
 @quam_dataclass
 class TemporaryCalibrationData(QuamBase):
-    """Temporary calibration data for a single qubit."""
-    # Store arbitrary calibration parameters and metadata
+    """Transient per-qubit calibration state.
+
+    Stored in ``Quam.temp_calibration[qubit_name]`` and persisted to the QUAM
+    state so that values survive node boundaries within a calibration run.
+    All fields are optional and default to None (absent until first written).
+    """
+
     parameters: Dict[str, Any] = None
-    # Adaptive frequency span for spectroscopy (in MHz)
+
+    # ── Spectroscopy adaptation ───────────────────────────────────────────────
     adaptive_frequency_span_mhz: Optional[float] = None
-    # Adaptive power shift for spectroscopy (in dBm) - cumulative adjustment
     adaptive_power_shift_dbm: Optional[float] = None
-    # Adaptive number of shots (legacy, no longer set)
     adaptive_num_shots: Optional[int] = None
-    # Blacklisted (qubit RF frequency Hz, drive power dBm) pairs that produced no Rabi oscillations.
-    # Each entry is [freq_hz, power_dbm]; masking applies within ±5 MHz and ±3 dBm.
+
+    # ── Blacklists ────────────────────────────────────────────────────────────
     blacklisted_qubit_points: Optional[List[List[float]]] = None
-    # Blacklisted resonator RF frequencies (Hz) that produced no real dip
     blacklisted_resonator_frequencies: Optional[List[float]] = None
-    # Initial (user-set) resonator frequencies saved before broad spectroscopy
-    # overwrites them; restored if high-power spectroscopy fails
+
+    # ── Resonator rollback values ─────────────────────────────────────────────
     initial_resonator_f01: Optional[float] = None
     initial_resonator_RF_frequency: Optional[float] = None
-    # Initial x180 amplitude and qubit frequency saved at the start of x180 fine calibration;
-    # restored if a Rabi or Ramsey fit fails mid-loop
+
+    # ── x180 / qubit rollback values ─────────────────────────────────────────
     initial_x180_amplitude: Optional[float] = None
     initial_qubit_f01: Optional[float] = None
-    # Initial LO/RF frequency (Hz) saved alongside initial_qubit_f01;
-    # restored together with f_01 if a Rabi or Ramsey fit fails mid-loop
     initial_rf_frequency: Optional[float] = None
-    # Selected spectroscopy drive power (dBm) and Octave gain (dB) saved by
-    # qubit_spectroscopy_vs_power on success; used by downstream nodes to know the
-    # power setting at which the qubit was found
+    initial_x180_length_ns: Optional[float] = None
+
+    # ── Spectroscopy result ───────────────────────────────────────────────────
     selected_power_dbm: Optional[float] = None
     selected_octave_gain_db: Optional[float] = None
-    # Adaptive x180 pulse duration (ns) used when amplitude + Octave gain are both at maximum
-    # and TOO_FEW_PERIODS is detected.  None means no duration adaptation is active.
+
+    # ── Duration adaptation ───────────────────────────────────────────────────
     adaptive_x180_length_ns: Optional[float] = None
-    # Original x180 pulse length (ns) saved at the start of duration adaptation;
-    # restored if a Rabi fit fails while duration adaptation is active
-    initial_x180_length_ns: Optional[float] = None
-    # Optional timestamp or metadata fields
+
+    # ── Metadata ─────────────────────────────────────────────────────────────
     last_updated: Optional[str] = None
     notes: Optional[str] = None
 
 
-# Define the QUAM class that will be used in all calibration nodes
-# Should inherit from either FixedFrequencyQuam or FluxTunableQuam
 @quam_dataclass
 class Quam(FixedFrequencyQuam):
-    # Temporary calibration data per qubit
-    # Note: Use Dict for QUAM JSON serialization compatibility
+    """QUAM for a fixed-frequency transmon coupled to SRF cavities on OPX+/Octave.
+
+    Extends FixedFrequencyQuam with:
+      - cavities: SRF storage cavities (Alice, Bob, ...)
+      - cavity_transmon_pairs: qubit–cavity coupling parameters (chi, displacement k)
+      - temp_calibration: per-qubit temporary state used by adaptive calibration nodes
+
+    The load() override fixes a QUAM serialisation quirk where Octave loopbacks
+    (Tuple[Tuple[str,str],str]) are round-tripped through JSON as nested lists,
+    which typeguard rejects on reload.
+    """
+
+    cavities: Dict[str, Cavity] = field(default_factory=dict)
+    cavity_transmon_pairs: Dict[str, CavityTransmonPair] = field(default_factory=dict)
     temp_calibration: Dict[str, TemporaryCalibrationData] = None
+
+    @classmethod
+    def load(cls, filepath_or_dict=None, **kwargs) -> "Quam":
+        """Load the QUAM state, patching Octave loopback tuples before validation.
+
+        JSON has no tuple type, so QUAM serialises Octave loopbacks — which are
+        typed as ``List[Tuple[Tuple[str, str], str]]`` — as nested lists.  On
+        reload, typeguard rejects the inner list because it expects a
+        ``Tuple[str, str]``, raising a validation error before the object is
+        even constructed.
+
+        This override loads the raw JSON dict first, converts the inner lists
+        back to tuples, and only then passes the fixed dict to the standard QUAM
+        instantiator via ``super().load()``.
+        """
+        if isinstance(filepath_or_dict, dict):
+            contents = filepath_or_dict
+        else:
+            serialiser = cls.get_serialiser()
+            contents, _ = serialiser.load(filepath_or_dict)
+
+        # Fix loopbacks: JSON round-trip turns Tuple[str,str] → list[str].
+        # Convert back to tuple so typeguard validation passes.
+        for oct_data in contents.get("octaves", {}).values():
+            if isinstance(oct_data, dict):
+                oct_data["loopbacks"] = [
+                    (tuple(src) if isinstance(src, list) else src, dst)
+                    for src, dst in oct_data.get("loopbacks", [])
+                ]
+
+        return super().load(contents, **kwargs)
