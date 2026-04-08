@@ -1,5 +1,5 @@
 from pydantic import field_validator
-from typing import Literal
+from typing import Literal, Optional
 
 from qualibrate import NodeParameters
 from qualibrate.parameters import RunnableParameters
@@ -17,6 +17,21 @@ class NodeSpecificParameters(RunnableParameters):
     """Number of averages per time point."""
     mode_name: str = "alice"
     """Which cavity mode to probe: 'alice' or 'bob'."""
+    cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
+    """How to reset the cavity before each displacement.
+    'thermal'        — wait thermalization_time_factor × T1 (passive decay).
+    'active_sideband'— drive f0g1 π-pulses to actively remove photons; requires a
+                       calibrated f0g1_pi operation on the sideband_drive of the
+                       corresponding CavityTransmonPair."""
+    cavity_active_cooling_fock_n: int = 1
+    """Starting Fock level for active sideband cooling (only used when
+    cavity_reset_type='active_sideband').  Set to 1 for thermal state cooling."""
+    f0g1_pulse_duration_ns: Optional[int] = None
+    """Override the f0g1 sideband pulse duration [ns] during active cooling.
+    When None (default), the calibrated f0g1_pi pulse length is used.
+    Set to a longer value (e.g. several ms) to ensure the cavity photon
+    decoheres fully during each cooling step, at the cost of longer reset time.
+    Must be a multiple of 4 ns."""
     displacement_scale: float = 1.0
     """Amplitude scale for the displacement pulse.
     After node 30/32 calibration: scale=1 → 1 photon.  Use scale>1 for a
@@ -29,6 +44,10 @@ class NodeSpecificParameters(RunnableParameters):
     spans [min, delay_repeats × max] ns.  The x-axis always shows total time."""
     use_state_discrimination: bool = True
     """True → measure qubit state. False → measure raw I quadrature."""
+    normalize_plot: bool = False
+    """When True and use_state_discrimination=False, normalize the plotted I signal
+    to [0, 1] so the decay starts at 1 (full vacuum-state signal) and the baseline
+    is 0.  Has no effect when use_state_discrimination=True."""
 
     @field_validator("displacement_scale")
     @classmethod

@@ -63,8 +63,8 @@ def fit_raw_data(
     ds_fit : xr.Dataset
     fit_results : dict[str, FitParameters]
     """
-    cavity_mode = _get_cavity_mode(node)
-    base_amp = cavity_mode.f0g1.operations[node.parameters.operation].amplitude
+    sideband_drive = _get_sideband_drive(node)
+    base_amp = sideband_drive.operations[node.parameters.operation].amplitude
 
     if node.parameters.use_state_discrimination:
         signal = ds.state
@@ -117,10 +117,11 @@ def fit_raw_data(
     return ds_fit, fit_results
 
 
-def _get_cavity_mode(node: QualibrationNode):
+def _get_sideband_drive(node: QualibrationNode):
+    """Return the sideband_drive channel for the cavity_transmon_pair whose
+    cavity_mode_name matches node.parameters.mode_name."""
     mode_name = node.parameters.mode_name
-    for cav in node.machine.cavities.values():
-        mode = getattr(cav, mode_name, None)
-        if mode is not None:
-            return mode
-    raise KeyError(f"Cavity mode '{mode_name}' not found in machine.cavities")
+    for pair in node.machine.cavity_transmon_pairs.values():
+        if pair.cavity_mode_name == mode_name:
+            return pair.sideband_drive
+    raise KeyError(f"No cavity_transmon_pair with cavity_mode_name='{mode_name}'")

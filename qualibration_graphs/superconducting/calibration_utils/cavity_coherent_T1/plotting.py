@@ -8,10 +8,21 @@ import xarray as xr
 from .analysis import CoherentT1Fit, coherent_T1_model
 
 
+def _normalize(signal: np.ndarray, fit_curve: np.ndarray):
+    """Min-max normalize signal to [0, 1]; apply same scaling to fit_curve."""
+    y_min = signal.min()
+    y_max = signal.max()
+    span = y_max - y_min
+    if span == 0:
+        return signal, fit_curve
+    return (signal - y_min) / span, (fit_curve - y_min) / span
+
+
 def plot_coherent_T1(
     ds: xr.Dataset,
     fit_results: Dict,
     mode_name: str = "alice",
+    normalize_plot: bool = False,
 ) -> plt.Figure:
     """Plot the coherent T1 double-exponential decay for each qubit.
 
@@ -35,12 +46,12 @@ def plot_coherent_T1(
         fontsize=13,
     )
 
+    should_normalize = normalize_plot and signal_name == "I"
+
     for ax, q_name in zip(axes[0], qubit_names):
         ds_q = ds.sel(qubit=q_name)
         t_ns = ds_q.idle_time.values.astype(float)
         signal = ds_q[signal_name].values.astype(float)
-
-        ax.plot(t_ns * 1e-3, signal, "o", ms=4, color="steelblue", label="data")
 
         res = fit_results.get(str(q_name))
         # Normalise to plain dict (may arrive as dataclass or dict)
@@ -54,9 +65,8 @@ def plot_coherent_T1(
                 "success": res.success,
             }
 
+        fit_curve = None
         if res is not None and res.get("success"):
-            T1_us = res["T1_ns"] * 1e-3
-            T1_err_us = res["T1_error_ns"] * 1e-3
             t_fine = np.linspace(t_ns[0], t_ns[-1], 500)
             fit_curve = coherent_T1_model(
                 t_fine,
@@ -65,6 +75,17 @@ def plot_coherent_T1(
                 res["T1_ns"],
                 res["offset"],
             )
+
+        if should_normalize and fit_curve is not None:
+            signal, fit_curve = _normalize(signal, fit_curve)
+        elif should_normalize:
+            signal, _ = _normalize(signal, signal)
+
+        ax.plot(t_ns * 1e-3, signal, "o", ms=4, color="steelblue", label="data")
+
+        if res is not None and res.get("success"):
+            T1_us = res["T1_ns"] * 1e-3
+            T1_err_us = res["T1_error_ns"] * 1e-3
             ax.plot(
                 t_fine * 1e-3,
                 fit_curve,
@@ -84,7 +105,8 @@ def plot_coherent_T1(
             )
 
         ax.set_xlabel("Wait time (µs)", fontsize=11)
-        ax.set_ylabel("State population", fontsize=11)
+        ylabel = "State population" if signal_name == "state" else ("I (normalized)" if should_normalize else "I (V)")
+        ax.set_ylabel(ylabel, fontsize=11)
         ax.set_title(q_name, fontsize=11)
         ax.legend(fontsize=9)
         ax.grid(True, alpha=0.3)

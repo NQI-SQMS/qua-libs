@@ -1,0 +1,325 @@
+# %% {Imports}
+import time
+import matplotlib.pyplot as plt
+
+import numpy as np
+import xarray as xr
+
+from qm.qua import *
+
+from qualang_tools.loops import from_array
+from qualang_tools.multi_user import qm_session
+from qualang_tools.units import unit
+
+from qualibrate import QualibrationNode
+from quam_config import Quam
+from qualibration_libs.data import XarrayDataFetcher, convert_IQ_to_V
+from qualibration_libs.parameters import get_qubits, get_idle_times_in_clock_cycles
+from qualibration_libs.runtime import simulate_and_plot
+from calibration_utils.T1_thermal_monitor import (
+    Parameters,
+    IterResult,
+    fit_T1_dataset,
+    fit_rpm_datasets,
+    build_dataset,
+    reconstruct_iter_results,
+    log_iteration,
+    log_summary,
+    plot_T1_thermal_monitor,
+)
+
+# %% {Node initialisation}
+description = """
+        T1 & THERMAL POPULATION MONITOR
+Repeatedly runs a T1 decay experiment followed by a qubit RPM (Rabi Population
+Measurement) to monitor long-timescale correlations between T1 degradation and
+rising qubit thermal population.
+
+Each iteration:
+  1. T1 sweep  — x180 → wait(t) → measure → fit exponential decay → T1 [µs]
+  2. RPM 'g' sweep  — ge_π → ef(a) → ef_π → ge_π → measure  (start from |g⟩)
+  3. RPM 'e' sweep  — ef(a) → ge_π → measure  (start from thermal state)
+     → P_th = A_e / (A_e + A_g)
+
+All results are accumulated and saved as an xr.Dataset (.h5 via node.save()).
+
+Prerequisites:
+    - Calibrated x180 pulse (nodes 03/04).
+    - Calibrated EF_x180 pulse (node 13).
+    - Calibrated readout (nodes 02a/02b/02c).
+
+State update: none (monitoring only).
+"""
+
+node = QualibrationNode[Parameters, Quam](
+    name="34_T1_thermal_monitor",
+    description=description,
+    parameters=Parameters(),
+)
+
+
+@node.run_action(skip_if=node.modes.external)
+def custom_param(node: QualibrationNode[Parameters, Quam]):
+    # node.parameters.qubits = ["q1"]
+    # node.parameters.n_iter = 60
+    # node.parameters.num_shots = 200
+    pass
+
+
+node.machine = Quam.load()
+
+
+def _make_rpm_program(qubits, amp_factors, num_qubits, n_avg, ef_op, u, start_from_g: bool):
+    """Build a QUA program for one RPM sweep direction.
+
+    start_from_g=True  → 'g' sequence: ge_π → ef(a) → ef_π(back-swap) → ge_π → measure
+    start_from_g=False → 'e' sequence: ef(a) → ge_π → measure
+    """
+    with program() as qua_prog:
+        n = declare(int)
+        a = declare(fixed)
+        n_st = declare_stream()
+
+        # RPM always uses state discrimination (fundamental to the protocol)
+        state = [declare(int) for _ in range(num_qubits)]
+        state_st = [declare_stream() for _ in range(num_qubits)]
+
+        for multiplexed_qubits in qubits.batch():
+            for qubit in multiplexed_qubits.values():
+                node.machine.initialize_qpu(target=qubit)
+
+            with for_(n, 0, n < n_avg, n + 1):
+                save(n, n_st)
+                with for_(*from_array(a, amp_factors)):
+                    for i, qubit in multiplexed_qubits.items():
+                        qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
+
+                        if start_from_g:
+                            # Prepare |e⟩ via ge_π
+                            qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
+                            qubit.xy.play("x180")
+
+                        # EF Rabi with swept amplitude
+                        qubit.xy.update_frequency(
+                            qubit.xy.intermediate_frequency + qubit.anharmonicity
+                        )
+                        qubit.xy.play(ef_op, amplitude_scale=a)
+
+                        if start_from_g:
+                            # Back-swap: ef_π maps |f⟩→|e⟩
+                            qubit.xy.play(ef_op)
+
+                        # Return to ge basis and map to |g⟩ or |e⟩
+                        qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
+                        qubit.xy.play("x180")
+
+                        # Measure
+                        align(qubit.xy.name, qubit.resonator.name)
+                        qubit.readout_state(state[i])
+                        save(state[i], state_st[i])
+                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+
+                    align()
+
+        with stream_processing():
+            n_st.save("n")
+            for i in range(num_qubits):
+                state_st[i].buffer(len(amp_factors)).average().save(f"state{i + 1}")
+
+    return qua_prog
+
+
+# %% {Create_QUA_program}
+@node.run_action(skip_if=node.parameters.load_data_id is not None)
+def create_qua_program(node: QualibrationNode[Parameters, Quam]):
+    """Build the T1 sweep program and the two RPM programs (g and e)."""
+    u = unit(coerce_to_integer=True)
+    node.namespace["qubits"] = qubits = get_qubits(node)
+    num_qubits = len(qubits)
+    n_avg = node.parameters.num_shots
+    ef_op = node.parameters.ef_operation
+
+    # ── T1 sweep axes ────────────────────────────────────────────────────────
+    idle_times = get_idle_times_in_clock_cycles(node.parameters)
+    node.namespace["t1_sweep_axes"] = {
+        "qubit": xr.DataArray(qubits.get_names()),
+        "idle_time": xr.DataArray(
+            4 * idle_times, attrs={"long_name": "idle time", "units": "ns"}
+        ),
+    }
+
+    # ── RPM sweep axes ───────────────────────────────────────────────────────
+    amp_factors = np.arange(
+        node.parameters.min_amp_factor,
+        node.parameters.max_amp_factor,
+        node.parameters.amp_factor_step,
+    )
+    node.namespace["rpm_sweep_axes"] = {
+        "qubit": xr.DataArray(qubits.get_names()),
+        "amp_factor": xr.DataArray(amp_factors, attrs={"long_name": "EF amplitude factor"}),
+    }
+
+    # ── T1 QUA program ───────────────────────────────────────────────────────
+    with program() as t1_prog:
+        I, I_st, Q, Q_st, n, n_st = node.machine.declare_qua_variables()
+        t = declare(int)
+        if node.parameters.use_state_discrimination:
+            state = [declare(int) for _ in range(num_qubits)]
+            state_st = [declare_stream() for _ in range(num_qubits)]
+
+        for multiplexed_qubits in qubits.batch():
+            for qubit in multiplexed_qubits.values():
+                node.machine.initialize_qpu(target=qubit)
+
+            with for_(n, 0, n < n_avg, n + 1):
+                save(n, n_st)
+                with for_each_(t, idle_times):
+                    for i, qubit in multiplexed_qubits.items():
+                        qubit.reset(
+                            node.parameters.reset_type,
+                            node.parameters.simulate,
+                            log_callable=node.log,
+                        )
+
+                    for i, qubit in multiplexed_qubits.items():
+                        qubit.align()
+                        qubit.xy.play("x180")
+                        qubit.align()
+                        qubit.resonator.wait(t)
+
+                    for i, qubit in multiplexed_qubits.items():
+                        if node.parameters.use_state_discrimination:
+                            qubit.readout_state(state[i])
+                            save(state[i], state_st[i])
+                        else:
+                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                            save(I[i], I_st[i])
+                            save(Q[i], Q_st[i])
+
+        with stream_processing():
+            n_st.save("n")
+            for i in range(num_qubits):
+                if node.parameters.use_state_discrimination:
+                    state_st[i].buffer(len(idle_times)).average().save(f"state{i + 1}")
+                else:
+                    I_st[i].buffer(len(idle_times)).average().save(f"I{i + 1}")
+                    Q_st[i].buffer(len(idle_times)).average().save(f"Q{i + 1}")
+
+    node.namespace["qua_program_t1"] = t1_prog
+
+    # ── RPM QUA programs ─────────────────────────────────────────────────────
+    node.namespace["qua_program_g"] = _make_rpm_program(
+        qubits, amp_factors, num_qubits, n_avg, ef_op, u, start_from_g=True
+    )
+    node.namespace["qua_program_e"] = _make_rpm_program(
+        qubits, amp_factors, num_qubits, n_avg, ef_op, u, start_from_g=False
+    )
+
+
+# %% {Simulate}
+@node.run_action(skip_if=node.parameters.load_data_id is not None or not node.parameters.simulate)
+def simulate_qua_program(node: QualibrationNode[Parameters, Quam]):
+    """Simulate only the T1 program for quick waveform inspection."""
+    qmm = node.machine.connect()
+    config = node.machine.generate_config()
+    samples, fig, wf_report = simulate_and_plot(
+        qmm, config, node.namespace["qua_program_t1"], node.parameters
+    )
+    node.results["simulation"] = {"figure": fig, "wf_report": wf_report, "samples": samples}
+
+
+# %% {Execute}
+@node.run_action(skip_if=node.parameters.load_data_id is not None or node.parameters.simulate)
+def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
+    """Run T1 + RPM programs n_iter times and accumulate results."""
+    qmm = node.machine.connect()
+    config = node.machine.generate_config()
+    qubits = node.namespace["qubits"]
+    n_iter = node.parameters.n_iter
+    use_sd = node.parameters.use_state_discrimination
+
+    iter_results = {q.name: IterResult(qubit=q.name) for q in qubits}
+
+    t0 = time.time()
+
+    for iteration in range(n_iter):
+        # ── T1 sweep ─────────────────────────────────────────────────────────
+        with qm_session(qmm, config, timeout=node.parameters.timeout) as qm:
+            job_t1 = qm.execute(node.namespace["qua_program_t1"])
+            fetcher_t1 = XarrayDataFetcher(job_t1, node.namespace["t1_sweep_axes"])
+            for ds_t1 in fetcher_t1:
+                pass  # wait for completion
+
+        if not use_sd:
+            ds_t1 = convert_IQ_to_V(ds_t1, qubits)
+
+        T1_fits = fit_T1_dataset(ds_t1, use_sd)
+
+        # ── RPM sweeps ───────────────────────────────────────────────────────
+        with qm_session(qmm, config, timeout=node.parameters.timeout) as qm:
+            job_g = qm.execute(node.namespace["qua_program_g"])
+            fetcher_g = XarrayDataFetcher(job_g, node.namespace["rpm_sweep_axes"])
+            for ds_g in fetcher_g:
+                pass
+
+        with qm_session(qmm, config, timeout=node.parameters.timeout) as qm:
+            job_e = qm.execute(node.namespace["qua_program_e"])
+            fetcher_e = XarrayDataFetcher(job_e, node.namespace["rpm_sweep_axes"])
+            for ds_e in fetcher_e:
+                pass
+
+        rpm_fits = fit_rpm_datasets(ds_g, ds_e, use_sd, qubits)
+
+        # ── Accumulate ───────────────────────────────────────────────────────
+        t_sec = time.time() - t0
+        for q in qubits:
+            qn = q.name
+            iter_results[qn].t_sec.append(t_sec)
+            iter_results[qn].T1_us.append(T1_fits[qn]["T1_us"])
+            iter_results[qn].T1_error_us.append(T1_fits[qn]["T1_error_us"])
+            iter_results[qn].P_th.append(rpm_fits[qn]["P_th"])
+            iter_results[qn].T_eff_mk.append(rpm_fits[qn]["T_eff_mk"])
+
+        log_iteration(iteration, n_iter, t_sec, T1_fits, rpm_fits, log_callable=node.log)
+
+    node.namespace["iter_results"] = iter_results
+
+
+# %% {Load_data}
+@node.run_action(skip_if=node.parameters.load_data_id is None)
+def load_data(node: QualibrationNode[Parameters, Quam]):
+    """Load a previously acquired dataset and reconstruct IterResult objects."""
+    load_data_id = node.parameters.load_data_id
+    node.load_from_id(node.parameters.load_data_id)
+    node.parameters.load_data_id = load_data_id
+    node.namespace["qubits"] = get_qubits(node)
+    node.namespace["iter_results"] = reconstruct_iter_results(node.results["ds"])
+
+
+# %% {Analyse_data}
+@node.run_action(skip_if=node.parameters.simulate)
+def analyse_data(node: QualibrationNode[Parameters, Quam]):
+    """Assemble xr.Dataset from accumulated IterResult objects and log a summary."""
+    iter_results = node.namespace["iter_results"]
+    node.results["ds"] = build_dataset(iter_results)
+    log_summary(iter_results, log_callable=node.log)
+
+
+# %% {Plot_data}
+@node.run_action(skip_if=node.parameters.simulate)
+def plot_data(node: QualibrationNode[Parameters, Quam]):
+    """Plot T1 and thermal population time traces for all qubits."""
+    fig = plot_T1_thermal_monitor(
+        node.namespace["iter_results"],
+        node.namespace["qubits"],
+    )
+    plt.show()
+    node.results["figures"] = {"T1_thermal_monitor": fig}
+
+
+# %% {Save_results}
+@node.run_action()
+def save_results(node: QualibrationNode[Parameters, Quam]):
+    node.save()
+
+# %%

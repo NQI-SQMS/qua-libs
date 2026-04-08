@@ -11,8 +11,8 @@ class NodeSpecificParameters(RunnableParameters):
     """Frequency span to sweep around the current f0g1 RF_frequency [MHz]."""
     frequency_step_in_mhz: float = 0.25
     """Step size for the frequency sweep [MHz]."""
-    operation: str = "f0g1_pi"
-    """Pulse name on the f0g1 channel to apply during the sweep."""
+    operation: str = "saturation"
+    """Pulse name on the f0g1 channel to apply during the sweep (long square saturation pulse)."""
     operation_amplitude_factor: float = 1.0
     """Pre-factor applied to the operation amplitude."""
     operation_len_in_ns: Optional[int] = None
@@ -23,6 +23,10 @@ class NodeSpecificParameters(RunnableParameters):
     """Minimum dip depth as a fraction of the state population range. Dips smaller than this are rejected."""
     use_state_discrimination: bool = True
     """True → measure qubit state (recommended). False → measure raw I/Q."""
+    cavity_thermalization_time_ns: Optional[int] = None
+    """Override the cavity thermalization wait at the start of each shot [ns].
+    When set, this value is used instead of cavity_mode.T1 × thermalization_time_factor.
+    Useful for long-T1 cavities (e.g. SRF) where the default would be impractically long."""
 
 
 class Parameters(

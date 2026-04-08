@@ -32,6 +32,10 @@ class NodeSpecificParameters(RunnableParameters):
     """True → measure qubit state (recommended). False → measure raw I/Q."""
     min_dip_fraction: float = 0.05
     """Minimum dip depth as a fraction of the signal range. Shallower dips are rejected."""
+    cavity_thermalization_time_ns: Optional[int] = None
+    """Override the cavity thermalization wait time [ns]. When set, this value is used
+    instead of cavity_mode.T1 × cavity_mode.thermalization_time_factor.
+    Useful when T1 is very long (e.g. SRF cavities) and you want a shorter practical wait."""
 
 
 class Parameters(

@@ -1,3 +1,5 @@
+from typing import Literal, Optional
+
 from pydantic import field_validator
 
 from qualibrate import NodeParameters
@@ -17,6 +19,11 @@ class NodeSpecificParameters(RunnableParameters):
     Creates a coherent state |α⟩ with mean photon number n̄ = displacement_scale²
     (after node 32 calibration: scale=1 → 1 photon).
     Must be in (-2, +2) — the QUA hardware limit is ±(2 - 2^-16)."""
+    displacement_alpha: float = 1.0
+    """Multiplier applied on top of displacement_scale.  The actual QUA amplitude
+    used is displacement_scale × displacement_alpha.  Typically an integer (1, 2, 3).
+    The cavity thermalization wait is also scaled by this factor so that higher photon
+    numbers fully decay between shots."""
     active_reset: bool = True
     """If True, apply a reverse displacement D(-α) after measurement to
     return the cavity to vacuum immediately, replacing passive thermalization.
@@ -37,8 +44,25 @@ class NodeSpecificParameters(RunnableParameters):
     """Qubit pulse operation to use for spectroscopy.
     Typical choices: 'selective_x180' (narrow-bandwidth, resolves photon-number peaks)
     or 'x180' (standard pi-pulse, faster but lower frequency resolution)."""
+    cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
+    """How to reset the cavity between shots.
+    'thermal'        — wait thermalization_time_factor × T1 (passive decay).
+    'active_sideband'— drive f0g1 π-pulses to actively remove photons; requires a
+                       calibrated f0g1_pi operation on the sideband_drive of the
+                       corresponding CavityTransmonPair."""
+    cavity_active_cooling_fock_n: int = 1
+    """Starting Fock level for active sideband cooling (only used when
+    cavity_reset_type='active_sideband').  Set to 1 for thermal state cooling;
+    set higher if you know the cavity contains multiple photons."""
+    f0g1_pulse_duration_ns: Optional[int] = None
+    """Override the f0g1 sideband pulse duration [ns] during active cooling.
+    When None (default), the calibrated f0g1_pi pulse length is used.
+    Must be a multiple of 4 ns."""
     use_state_discrimination: bool = True
     """True -> measure qubit state. False -> measure raw I/Q."""
+    normalize_plot: bool = False
+    """When True and use_state_discrimination=False, normalize the plotted I signal
+    to [0, 1] using min-max scaling.  Has no effect when use_state_discrimination=True."""
 
     @field_validator("displacement_scale")
     @classmethod

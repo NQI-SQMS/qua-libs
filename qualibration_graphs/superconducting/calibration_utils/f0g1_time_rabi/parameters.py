@@ -1,3 +1,4 @@
+from typing import Optional
 from qualibrate import NodeParameters
 from qualibrate.parameters import RunnableParameters
 from qualibration_libs.parameters import (
@@ -7,6 +8,8 @@ from qualibration_libs.parameters import (
 
 
 class NodeSpecificParameters(RunnableParameters):
+    num_shots: int = 200
+    """Number of averages per sweep point. Default is 200."""
     mode_name: str = "alice"
     """Which cavity mode to probe: attribute name on the Cavity object (e.g. 'alice' or 'bob')."""
 
@@ -22,6 +25,10 @@ class NodeSpecificParameters(RunnableParameters):
 
     use_state_discrimination: bool = True
     """True -> measure qubit state (recommended). False -> measure raw I/Q."""
+    cavity_thermalization_time_ns: Optional[int] = None
+    """Override the cavity thermalization wait at the start of each shot [ns].
+    When set, this value is used instead of cavity_mode.T1 × thermalization_time_factor.
+    Useful for long-T1 cavities (e.g. SRF) where the default would be impractically long."""
 
 
 class Parameters(

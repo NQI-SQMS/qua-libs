@@ -1,3 +1,4 @@
+from typing import Optional
 from qualibrate import NodeParameters
 from qualibrate.parameters import RunnableParameters
 from qualibration_libs.parameters import QubitsExperimentNodeParameters, CommonNodeParameters
@@ -18,6 +19,10 @@ class NodeSpecificParameters(RunnableParameters):
     """Name of the f0g1 operation whose amplitude will be calibrated."""
     use_state_discrimination: bool = True
     """True → measure qubit state (recommended). False → measure raw I/Q."""
+    cavity_thermalization_time_ns: Optional[int] = None
+    """Override the cavity thermalization wait at the start of each shot [ns].
+    When set, this value is used instead of cavity_mode.T1 × thermalization_time_factor.
+    Useful for long-T1 cavities (e.g. SRF) where the default would be impractically long."""
 
 
 class Parameters(

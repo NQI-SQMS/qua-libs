@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Literal, Optional
 
 from qualibrate import NodeParameters
 from qualibrate.parameters import RunnableParameters
@@ -10,6 +10,24 @@ class NodeSpecificParameters(RunnableParameters):
     """Number of averages per (amplitude, frequency) point."""
     mode_name: str = "alice"
     """Which cavity mode to calibrate: 'alice' or 'bob'."""
+    cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
+    """How to reset the cavity between shots.
+    'thermal'        — wait thermalization_time_factor × T1 (passive decay).
+    'active_sideband'— drive f0g1 π-pulses to actively remove photons; requires a
+                       calibrated f0g1_pi operation on the sideband_drive of the
+                       corresponding CavityTransmonPair."""
+    cavity_active_cooling_fock_n: int = 1
+    """Starting Fock level for active sideband cooling (only used when
+    cavity_reset_type='active_sideband').  The cooling loop removes photons from
+    |fock_n⟩ down to vacuum by driving |n,g⟩→|n-1,f⟩ and waiting for qubit
+    relaxation at each step.  Set to 1 for thermal state cooling; set higher if
+    you know the cavity contains multiple photons."""
+    f0g1_pulse_duration_ns: Optional[int] = None
+    """Override the f0g1 sideband pulse duration [ns] during active cooling.
+    When None (default), the calibrated f0g1_pi pulse length is used.
+    Set to a longer value (e.g. several ms) to ensure the cavity photon
+    decoheres fully during each cooling step, at the cost of longer reset time.
+    Must be a multiple of 4 ns."""
     right_offset_mhz: float = 2.0
     """Frequency offset above the qubit ge frequency where the sweep starts [MHz].
     A small positive margin above the n=0 peak (which sits at the qubit frequency)."""
