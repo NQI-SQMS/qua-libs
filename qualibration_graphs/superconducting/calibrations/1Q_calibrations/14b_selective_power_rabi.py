@@ -31,7 +31,7 @@ description = """
 Calibrates the amplitude of a long, narrow-bandwidth "selective_x180" square pulse
 at the qubit ge frequency.  Because the pulse is long (default 10 µs) its bandwidth
 is narrow (~100 kHz), enabling photon-number-resolved single-qubit rotations required
-for cavity mode spectroscopy (node 27) and photon number splitting (node 28).
+for cavity mode spectroscopy (node 27) and photon number resolved spectroscopy (node 28).
 
 Prerequisites:
     - Calibrated x180 (ge) pulse (node 04b).
@@ -41,7 +41,7 @@ State update:
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="03_selective_power_rabi",
+    name="14b_selective_power_rabi",
     description=description,
     parameters=Parameters(),
 )
@@ -100,23 +100,22 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         qubit.xy.play(operation, amplitude_scale=a)
                     align()
                     for i, qubit in multiplexed_qubits.items():
+                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                        save(I[i], I_st[i])
+                        save(Q[i], Q_st[i])
                         if node.parameters.use_state_discrimination:
-                            qubit.readout_state(state[i])
+                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        else:
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
+                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
                     align()
 
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
+                I_st[i].buffer(len(amps)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(amps)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
                     state_st[i].buffer(len(amps)).average().save(f"state{i + 1}")
-                else:
-                    I_st[i].buffer(len(amps)).average().save(f"I{i + 1}")
-                    Q_st[i].buffer(len(amps)).average().save(f"Q{i + 1}")
 
 
 # %% {Simulate}

@@ -107,22 +107,21 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         qubit.resonator.wait(t)
 
                     for i, qubit in multiplexed_qubits.items():
+                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                        save(I[i], I_st[i])
+                        save(Q[i], Q_st[i])
                         if node.parameters.use_state_discrimination:
-                            qubit.readout_state(state[i])
+                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        else:
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
+                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
 
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
+                I_st[i].buffer(len(idle_times)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(idle_times)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
                     state_st[i].buffer(len(idle_times)).average().save(f"state{i + 1}")
-                else:
-                    I_st[i].buffer(len(idle_times)).average().save(f"I{i + 1}")
-                    Q_st[i].buffer(len(idle_times)).average().save(f"Q{i + 1}")
 
 
 # %% {Simulate}
@@ -150,6 +149,7 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
         q.name: T1MonitorResult(qubit=q.name, t_min=[], T1_us=[], T1_error_us=[])
         for q in qubits
     }
+    raw_list: list = []
 
     t0 = time.time()
 
@@ -164,6 +164,7 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
 
         ds = process_raw_dataset(dataset, use_sd, qubits)
         fit = fit_single_dataset(ds, use_sd)
+        raw_list.append(ds.assign_coords(iteration=iteration))
 
         for q_name, res in fit.items():
             monitor_results[q_name].t_min.append(elapsed_min)
@@ -187,6 +188,7 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
         for q, r in monitor_results.items()
     }
     node.namespace["monitor_results"] = monitor_results
+    node.namespace["raw_list"] = raw_list
 
 
 # %% {Load_historical_data}
@@ -228,6 +230,10 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
     monitor_results = node.namespace["monitor_results"]
     node.results["ds"] = build_dataset(monitor_results)
     log_monitor_summary(monitor_results, log_callable=node.log)
+
+    # Concatenate per-iteration raw I/Q datasets and save for archival
+    if "raw_list" in node.namespace and node.namespace["raw_list"]:
+        node.results["ds_raw"] = xr.concat(node.namespace["raw_list"], dim="iteration")
 
 
 # %% {Plot_data}

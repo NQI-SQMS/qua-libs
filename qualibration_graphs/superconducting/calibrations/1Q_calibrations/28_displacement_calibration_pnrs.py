@@ -16,7 +16,7 @@ from qualibrate import QualibrationNode
 from quam_builder.tools.power_tools import calculate_voltage_scaling_factor
 from qualibration_libs.core import tracked_updates
 from quam_config import Quam
-from calibration_utils.displacement_calibration_pns import (
+from calibration_utils.displacement_calibration_pnrs import (
     Parameters,
     process_raw_dataset,
     fit_raw_data,
@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 
 # %% {Description}
 description = """
-        DISPLACEMENT CALIBRATION — PHOTON NUMBER SPLITTING METHOD (28)
+        DISPLACEMENT CALIBRATION — PHOTON NUMBER RESOLVED SPECTROSCOPY METHOD (28)
 
 Sweeps the cavity displacement pulse amplitude A (outer loop) and the qubit
 ge spectroscopy frequency (inner loop).  For each amplitude A a spectrum is
@@ -55,14 +55,13 @@ Prerequisites:
     - Displacement pulse operation present on cavity_mode_drive.
 
 State updates:
-    - cavity_mode.chi  [Hz]
     - cavity_mode.cavity_mode_drive.operations["displacement"].amplitude  (= A₁ph)
     - cavity_transmon_pairs["{qubit}_{mode}"].chi
     - cavity_transmon_pairs["{qubit}_{mode}"].displacement_k  (= k)
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="09_displacement_calibration_pns",
+    name="28_displacement_calibration_pnrs",
     description=description,
     parameters=Parameters(),
 )
@@ -150,11 +149,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         df = declare(int)
         n_st = declare_stream()
 
+        I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
         if node.parameters.use_state_discrimination:
             state = [declare(int) for _ in range(num_qubits)]
             state_st = [declare_stream() for _ in range(num_qubits)]
-        else:
-            I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
 
         for multiplexed_qubits in qubits.batch():
             for qubit in multiplexed_qubits.values():
@@ -200,15 +198,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                             # Measure
                             align(qubit.xy.name, qubit.resonator.name)
+                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                            save(I[i], I_st[i])
+                            save(Q[i], Q_st[i])
                             if node.parameters.use_state_discrimination:
-                                qubit.readout_state(state[i])
+                                assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                            else:
-                                qubit.resonator.measure(
-                                    "readout", qua_vars=(I[i], Q[i])
-                                )
-                                save(I[i], I_st[i])
-                                save(Q[i], Q_st[i])
+                                wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
 
                             qubit.resonator.wait(node.machine.depletion_time * u.ns)
                         align()
@@ -216,16 +212,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
+                I_st[i].buffer(len(dfs)).buffer(len(amps)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(dfs)).buffer(len(amps)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
                     state_st[i].buffer(len(dfs)).buffer(len(amps)).average().save(
                         f"state{i + 1}"
-                    )
-                else:
-                    I_st[i].buffer(len(dfs)).buffer(len(amps)).average().save(
-                        f"I{i + 1}"
-                    )
-                    Q_st[i].buffer(len(dfs)).buffer(len(amps)).average().save(
-                        f"Q{i + 1}"
                     )
 
 
@@ -276,7 +267,7 @@ def load_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def analyse_data(node: QualibrationNode[Parameters, Quam]):
     node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
-    node.results["ds_raw"], fit_results = fit_raw_data(node.results["ds_raw"], node)
+    node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}
     log_fitted_results(node.results["fit_results"], log_callable=node.log)
     node.outcomes = {
@@ -289,8 +280,8 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def plot_data(node: QualibrationNode[Parameters, Quam]):
     figures = {}
-    figures["displacement_calibration_pns"] = plot_raw_data_with_fit(
-        node.results["ds_raw"],
+    figures["displacement_calibration_pnrs"] = plot_raw_data_with_fit(
+        node.results["ds_fit"],
         node.namespace["qubits"],
         fit_results=node.results["fit_results"],
         mode_name=node.parameters.mode_name,
@@ -299,7 +290,7 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
 
     if node.parameters.selected_power_dbm is not None:
         figures["pns_spectrum_slice"] = plot_spectrum_at_power(
-            node.results["ds_raw"],
+            node.results["ds_fit"],
             node.namespace["qubits"],
             selected_power_dbm=node.parameters.selected_power_dbm,
             fit_results=node.results["fit_results"],
@@ -336,10 +327,6 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             # Store calibrated absolute amplitude: play at scale=1.0 → 1 photon on average
             cal_amplitude = base_amp * amp_one_scale
             cavity_mode.cavity_mode_drive.operations["displacement"].amplitude = float(cal_amplitude)
-
-            # Update chi on CavityMode (backward compat)
-            if hasattr(cavity_mode, "chi"):
-                cavity_mode.chi = float(chi_hz)
 
             # Update CavityTransmonPair (create on-the-fly if missing)
             pair_key = f"{qubit.name}_{mode_name}"

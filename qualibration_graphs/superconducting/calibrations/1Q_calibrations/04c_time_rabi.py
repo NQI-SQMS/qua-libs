@@ -133,24 +133,23 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                     # Readout
                     for i, qubit in multiplexed_qubits.items():
+                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                        save(I[i], I_st[i])
+                        save(Q[i], Q_st[i])
                         if node.parameters.use_state_discrimination:
-                            qubit.readout_state(state[i])
+                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        else:
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            qubit.resonator.wait(node.machine.depletion_time * u.ns)
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
+                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
+                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
                     align()
 
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
+                I_st[i].buffer(len(durations_cc)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(durations_cc)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
                     state_st[i].buffer(len(durations_cc)).average().save(f"state{i + 1}")
-                else:
-                    I_st[i].buffer(len(durations_cc)).average().save(f"I{i + 1}")
-                    Q_st[i].buffer(len(durations_cc)).average().save(f"Q{i + 1}")
 
 
 # %% {Simulate}

@@ -1,4 +1,4 @@
-"""Plotting for displacement calibration via PNS (node 28).
+"""Plotting for displacement calibration via PNRS (node 28).
 
 Produces two subplots per qubit:
   1. 2D colormesh: displacement amplitude (x) vs qubit detuning (y, kHz) vs state (colour).
@@ -56,7 +56,7 @@ def plot_raw_data_with_fit(
         fig.colorbar(pcm, ax=ax2d, label=clabel)
         ax2d.set_xlabel("Displacement power (dBm)")
         ax2d.set_ylabel("Qubit detuning (kHz)")
-        ax2d.set_title(f"{q_name} — {mode_name}: 2D PNS map")
+        ax2d.set_title(f"{q_name} — {mode_name}: 2D PNRS map")
 
         # Overlay fitted peak positions if available
         if fit_results and q_name in fit_results:
@@ -100,7 +100,7 @@ def plot_raw_data_with_fit(
         ax_nb.set_xlim(left=0)
         ax_nb.set_ylim(bottom=0)
 
-    fig.suptitle(f"Displacement Calibration (PNS) — {mode_name} (28)", fontsize=12)
+    fig.suptitle(f"Displacement Calibration (PNRS) — {mode_name} (28)", fontsize=12)
     fig.tight_layout()
     return fig
 
@@ -167,7 +167,7 @@ def plot_spectrum_at_power(
         ax.set_title(f"{q_name} — {mode_name}: {actual_power:.1f} dBm{nbar_str}")
 
     fig.suptitle(
-        f"PNS Spectrum at {selected_power_dbm:.1f} dBm — {mode_name} (28)", fontsize=11
+        f"PNRS Spectrum at {selected_power_dbm:.1f} dBm — {mode_name} (28)", fontsize=11
     )
     fig.tight_layout()
     return fig

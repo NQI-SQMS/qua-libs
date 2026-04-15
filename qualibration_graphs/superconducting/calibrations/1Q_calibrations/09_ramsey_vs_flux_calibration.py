@@ -117,7 +117,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             align()
 
             for i, qubit in multiplexed_qubits.items():
-                qubit.readout_state(init_state[i])
+                qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                assign(init_state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
+                wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
 
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
@@ -142,7 +144,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                         # Qubit readout
                         for i, qubit in multiplexed_qubits.items():
-                            qubit.readout_state(current_state[i])
+                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                            save(I[i], I_st[i])
+                            save(Q[i], Q_st[i])
+                            assign(current_state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
+                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
                             assign(state[i], init_state[i] ^ current_state[i])
                             assign(init_state[i], current_state[i])
                             save(state[i], state_st[i])
@@ -153,6 +159,8 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
+                I_st[i].buffer(len(idle_times)).buffer(len(fluxes)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(idle_times)).buffer(len(fluxes)).average().save(f"Q{i + 1}")
                 state_st[i].buffer(len(idle_times)).buffer(len(fluxes)).average().save(f"state{i + 1}")
 
 

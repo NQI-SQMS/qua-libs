@@ -6,8 +6,10 @@ Experiment:
 
       x90 → wait(t_parity) → x90 → measure
 
-  where t_parity = 1/(2·chi_hz) so that the qubit accumulates a phase of π per
-  photon — measuring the photon-number parity ⟨(-1)^n⟩.
+  where t_parity = 1/(4·chi_hz) = 1/(2·peak_spacing) so that the qubit
+  accumulates a phase of π per photon — measuring the photon-number parity ⟨(-1)^n⟩.
+  chi_hz = χ/(2π) [Hz] is the Hamiltonian coupling constant (H/ħ = χ a†a σz);
+  the per-photon qubit shift is 2·chi_hz, so τ_parity = 1/(2·2·chi_hz) = 1/(4·chi_hz).
 
   For a cavity in a coherent state |α = a·α_unit⟩ the measured signal is:
 
@@ -88,7 +90,7 @@ def wigner_gaussian(a: np.ndarray, amplitude: float, sigma: float, offset: float
 # ---------------------------------------------------------------------------
 
 def _get_chi_hz(node: QualibrationNode) -> Optional[float]:
-    """Return chi_hz [Hz] from parameters, CavityTransmonPair, or CavityMode."""
+    """Return chi_hz = χ/(2π) [Hz] from parameters or CavityTransmonPair."""
     if node.parameters.chi_hz is not None:
         val = float(node.parameters.chi_hz)
         if np.isfinite(val) and val > 0:
@@ -104,14 +106,6 @@ def _get_chi_hz(node: QualibrationNode) -> Optional[float]:
                 chi = float(pair.chi)
                 if np.isfinite(chi) and chi > 0:
                     return chi
-
-    cavity_mode = node.namespace.get("cavity_mode")
-    if cavity_mode is not None:
-        chi = getattr(cavity_mode, "chi", None)
-        if chi is not None:
-            chi = float(chi)
-            if np.isfinite(chi) and chi > 0:
-                return chi
 
     return None
 
@@ -134,7 +128,8 @@ def resolve_parity_time_ns(node: QualibrationNode) -> int:
             "or node.parameters.chi_hz (or run node 30 first to populate chi on "
             "CavityTransmonPair)."
         )
-    t_ns = 1e9 / (2.0 * chi_hz)
+    # τ = 1/(2·peak_spacing) = 1/(2·2·chi_hz) = 1/(4·chi_hz)
+    t_ns = 1e9 / (4.0 * chi_hz)
     t_ns_rounded = max(int(round(t_ns / 4)) * 4, 16)
     logging.getLogger(__name__).info(
         f"parity_time_ns computed from chi_hz={chi_hz*1e-3:.1f} kHz → {t_ns_rounded} ns"

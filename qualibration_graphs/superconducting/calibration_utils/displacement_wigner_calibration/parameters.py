@@ -18,12 +18,12 @@ class NodeSpecificParameters(RunnableParameters):
     """Number of amplitude points (linearly spaced from amp_min to amp_max)."""
     parity_time_ns: Optional[int] = None
     """Fixed Ramsey wait time for parity measurement [ns].
-    If None, computed from chi_hz: t = 1 / (2 * chi_hz).
+    If None, computed from chi_hz: t = 1 / (4 * chi_hz) = 1 / (2 * peak_spacing).
     Must be a multiple of 4 ns."""
     chi_hz: Optional[float] = None
-    """Dispersive shift (peak spacing) [Hz], used to compute parity_time_ns when
-    parity_time_ns is None.  If also None, read from cavity_transmon_pairs or
-    cavity_mode.chi in the machine state."""
+    """Dispersive coupling χ/(2π) [Hz] (Hamiltonian constant, H/ħ = χ a†a σz),
+    used to compute parity_time_ns when parity_time_ns is None.
+    If also None, read from cavity_transmon_pairs in the machine state."""
     use_state_discrimination: bool = True
     """True → measure qubit state (0/1). False → measure raw I/Q."""
 

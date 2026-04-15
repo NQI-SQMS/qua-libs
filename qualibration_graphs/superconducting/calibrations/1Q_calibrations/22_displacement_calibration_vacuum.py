@@ -61,7 +61,7 @@ State updates:
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="06_displacement_calibration_vacuum",
+    name="22_displacement_calibration_vacuum",
     description=description,
     parameters=Parameters(),
 )
@@ -181,13 +181,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     # --- Measure ---
                     for i, qubit in multiplexed_qubits.items():
                         align(qubit.xy.name, qubit.resonator.name)
+                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                        save(I[i], I_st[i])
+                        save(Q[i], Q_st[i])
                         if node.parameters.use_state_discrimination:
-                            qubit.readout_state(state[i])
+                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        else:
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
+                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
 
                     # --- Active reset: D(-a) returns cavity toward vacuum ---
                     if node.parameters.active_reset:
@@ -199,11 +199,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
+                I_st[i].buffer(len(amp_array)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(amp_array)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
                     state_st[i].buffer(len(amp_array)).average().save(f"state{i + 1}")
-                else:
-                    I_st[i].buffer(len(amp_array)).average().save(f"I{i + 1}")
-                    Q_st[i].buffer(len(amp_array)).average().save(f"Q{i + 1}")
 
 
 # %% {Simulate}
@@ -247,7 +246,7 @@ def load_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def analyse_data(node: QualibrationNode[Parameters, Quam]):
     node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
-    _, fit_results = fit_raw_data(node.results["ds_raw"], node)
+    node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}
     log_fitted_results(node.results["fit_results"], log_callable=node.log)
     node.outcomes = {

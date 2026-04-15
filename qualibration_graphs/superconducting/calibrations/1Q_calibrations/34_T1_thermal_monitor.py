@@ -80,6 +80,7 @@ def _make_rpm_program(qubits, amp_factors, num_qubits, n_avg, ef_op, u, start_fr
         a = declare(fixed)
         n_st = declare_stream()
 
+        I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
         # RPM always uses state discrimination (fundamental to the protocol)
         state = [declare(int) for _ in range(num_qubits)]
         state_st = [declare_stream() for _ in range(num_qubits)]
@@ -115,7 +116,10 @@ def _make_rpm_program(qubits, amp_factors, num_qubits, n_avg, ef_op, u, start_fr
 
                         # Measure
                         align(qubit.xy.name, qubit.resonator.name)
-                        qubit.readout_state(state[i])
+                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                        save(I[i], I_st[i])
+                        save(Q[i], Q_st[i])
+                        assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                         save(state[i], state_st[i])
                         qubit.resonator.wait(node.machine.depletion_time * u.ns)
 
@@ -124,6 +128,8 @@ def _make_rpm_program(qubits, amp_factors, num_qubits, n_avg, ef_op, u, start_fr
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
+                I_st[i].buffer(len(amp_factors)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(amp_factors)).average().save(f"Q{i + 1}")
                 state_st[i].buffer(len(amp_factors)).average().save(f"state{i + 1}")
 
     return qua_prog
@@ -188,22 +194,21 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         qubit.resonator.wait(t)
 
                     for i, qubit in multiplexed_qubits.items():
+                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                        save(I[i], I_st[i])
+                        save(Q[i], Q_st[i])
                         if node.parameters.use_state_discrimination:
-                            qubit.readout_state(state[i])
+                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        else:
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
+                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
 
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
+                I_st[i].buffer(len(idle_times)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(idle_times)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
                     state_st[i].buffer(len(idle_times)).average().save(f"state{i + 1}")
-                else:
-                    I_st[i].buffer(len(idle_times)).average().save(f"I{i + 1}")
-                    Q_st[i].buffer(len(idle_times)).average().save(f"Q{i + 1}")
 
     node.namespace["qua_program_t1"] = t1_prog
 
@@ -239,6 +244,9 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
     use_sd = node.parameters.use_state_discrimination
 
     iter_results = {q.name: IterResult(qubit=q.name) for q in qubits}
+    raw_t1_list: list = []
+    raw_g_list: list = []
+    raw_e_list: list = []
 
     t0 = time.time()
 
@@ -254,6 +262,7 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
             ds_t1 = convert_IQ_to_V(ds_t1, qubits)
 
         T1_fits = fit_T1_dataset(ds_t1, use_sd)
+        raw_t1_list.append(ds_t1.assign_coords(iteration=iteration))
 
         # ── RPM sweeps ───────────────────────────────────────────────────────
         with qm_session(qmm, config, timeout=node.parameters.timeout) as qm:
@@ -269,6 +278,8 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
                 pass
 
         rpm_fits = fit_rpm_datasets(ds_g, ds_e, use_sd, qubits)
+        raw_g_list.append(ds_g.assign_coords(iteration=iteration))
+        raw_e_list.append(ds_e.assign_coords(iteration=iteration))
 
         # ── Accumulate ───────────────────────────────────────────────────────
         t_sec = time.time() - t0
@@ -278,11 +289,16 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
             iter_results[qn].T1_us.append(T1_fits[qn]["T1_us"])
             iter_results[qn].T1_error_us.append(T1_fits[qn]["T1_error_us"])
             iter_results[qn].P_th.append(rpm_fits[qn]["P_th"])
+            iter_results[qn].P_th_err.append(rpm_fits[qn]["P_th_err"])
             iter_results[qn].T_eff_mk.append(rpm_fits[qn]["T_eff_mk"])
+            iter_results[qn].T_eff_mk_err.append(rpm_fits[qn]["T_eff_mk_err"])
 
         log_iteration(iteration, n_iter, t_sec, T1_fits, rpm_fits, log_callable=node.log)
 
     node.namespace["iter_results"] = iter_results
+    node.namespace["raw_t1_list"] = raw_t1_list
+    node.namespace["raw_g_list"] = raw_g_list
+    node.namespace["raw_e_list"] = raw_e_list
 
 
 # %% {Load_data}
@@ -303,6 +319,12 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
     iter_results = node.namespace["iter_results"]
     node.results["ds"] = build_dataset(iter_results)
     log_summary(iter_results, log_callable=node.log)
+
+    # Concatenate per-iteration raw I/Q datasets and save for archival
+    if "raw_t1_list" in node.namespace and node.namespace["raw_t1_list"]:
+        node.results["ds_raw_t1"] = xr.concat(node.namespace["raw_t1_list"], dim="iteration")
+        node.results["ds_raw_g"] = xr.concat(node.namespace["raw_g_list"], dim="iteration")
+        node.results["ds_raw_e"] = xr.concat(node.namespace["raw_e_list"], dim="iteration")
 
 
 # %% {Plot_data}

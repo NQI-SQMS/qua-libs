@@ -145,22 +145,29 @@ def create_qua_program(node: QualibrationNode[EfParameters, Quam]):
                     # Qubit readout
                     for i, qubit in multiplexed_qubits.items():
                         if node.parameters.use_state_discrimination:
-                            qubit.readout_state_gef(state[i])  # Need to calibrate gef readout first
+                            qubit.resonator.update_frequency(
+                                int(qubit.resonator.intermediate_frequency + qubit.resonator.GEF_frequency_shift)
+                            )
+                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                        save(I[i], I_st[i])
+                        save(Q[i], Q_st[i])
+                        if node.parameters.use_state_discrimination:
+                            qubit.resonator.update_frequency(qubit.resonator.intermediate_frequency)
+                            diff = declare(fixed, size=3)
+                            for p in range(3):
+                                assign(diff[p], Math.abs(I[i] - qubit.resonator.gef_centers[p][0]) + Math.abs(Q[i] - qubit.resonator.gef_centers[p][1]))
+                            assign(state[i], Math.argmin(diff))
                             save(state[i], state_st[i])
-                        else:
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
+                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
                     align()
 
         with stream_processing():
             n_st.save("n")
             for i, qubit in enumerate(qubits):
+                I_st[i].buffer(len(amps)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(amps)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
                     state_st[i].buffer(len(amps)).average().save(f"state{i + 1}")
-                else:
-                    I_st[i].buffer(len(amps)).average().save(f"I{i + 1}")
-                    Q_st[i].buffer(len(amps)).average().save(f"Q{i + 1}")
 
 
 # %% {Simulate}

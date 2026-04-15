@@ -17,43 +17,40 @@ from quam_config import Quam
 from qualibration_libs.data import XarrayDataFetcher
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.runtime import simulate_and_plot
-from calibration_utils.dispersive_shift_gef import (
+from calibration_utils.f0g1_time_rabi import (
     Parameters,
+    FitParameters,
+    process_raw_dataset,
     fit_raw_data,
     log_fitted_results,
     plot_raw_data_with_fit,
-    process_raw_dataset,
 )
 
 # %% {Node initialisation}
 description = """
-        GEF DISPERSIVE SHIFT MEASUREMENT
-This node measures all three resonator frequencies by sweeping the readout
-resonator frequency in three conditions:
-  1. Qubit in |g⟩ (thermal / after reset)
-  2. Qubit in |e⟩ (after x180 pulse)
-  3. Qubit in |f⟩ (after x180 + EF_x180 pulses)
+        F0G1 TIME RABI (DURATION SWEEP)
+Sweeps the f0g1 sideband drive duration while the qubit is prepared in |f>.
+A Rabi-like oscillation is observed in the qubit state population, from which
+the pi-pulse duration is extracted (first minimum of the fitted sinusoid).
 
-Each spectrum is fitted with a Lorentzian dip. The extracted quantities are:
-  chi_ge = f_resonator(|e⟩) - f_resonator(|g⟩)
-  chi_ef = f_resonator(|f⟩) - f_resonator(|e⟩)
-
-The optimal readout frequency is set to f_resonator(|e⟩), which gives maximum
-discrimination contrast between |g⟩ and |e⟩.
+Sequence:
+  1. Wait thermalization time (2x T1)
+  2. pi_ge  ->  |e>
+  3. pi_ef  ->  |f>
+  4. Play f0g1 pulse with varying duration
+  5. pi_ef  (back-swap)
+  6. Measure qubit state
 
 Prerequisites:
-    - Calibrated resonator (nodes 02a/02b).
-    - Calibrated x180 pulse (node 04b).
-    - Calibrated EF_x180 pulse (node 13).
+    - Calibrated f0g1 sideband frequency (node 21).
+    - Rough f0g1 pi-pulse amplitude calibrated (node 22).
 
-State updates:
-    - qubit.resonator.RF_frequency → f_resonator(|e⟩).
-    - qubit.chi    (if attribute exists) → chi_ge [Hz].
-    - qubit.chi_ef (if attribute exists) → chi_ef [Hz].
+State update:
+    - cavity_transmon_pairs["{qubit}_{mode}"].sideband_drive.operations[operation].length  ->  pi-pulse duration [ns].
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="01b_dispersive_shift_gef",
+    name="27_f0g1_time_rabi",
     description=description,
     parameters=Parameters(),
 )
@@ -62,11 +59,21 @@ node = QualibrationNode[Parameters, Quam](
 @node.run_action(skip_if=node.modes.external)
 def custom_param(node: QualibrationNode[Parameters, Quam]):
     """Debugging / local overrides."""
-    # node.parameters.qubits = ["q1"]
+    # node.parameters.mode_name = "alice"
     pass
 
 
 node.machine = Quam.load()
+
+
+def _get_sideband_drive(node):
+    """Return the sideband_drive channel for the cavity_transmon_pair whose
+    cavity_mode_name matches node.parameters.mode_name."""
+    mode_name = node.parameters.mode_name
+    for pair in node.machine.cavity_transmon_pairs.values():
+        if pair.cavity_mode_name == mode_name:
+            return pair.sideband_drive
+    raise KeyError(f"No cavity_transmon_pair with cavity_mode_name='{mode_name}'")
 
 
 # %% {Create_QUA_program}
@@ -77,20 +84,47 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     num_qubits = len(qubits)
 
     n_avg = node.parameters.num_shots
-    span = node.parameters.frequency_span_in_mhz * u.MHz
-    step = node.parameters.frequency_step_in_mhz * u.MHz
-    dfs = np.arange(-span // 2, +span // 2, step)
+    durations_ns = np.arange(
+        node.parameters.min_duration_ns,
+        node.parameters.max_duration_ns,
+        node.parameters.duration_step_ns,
+    )
+    durations_cc = (durations_ns // 4).astype(int)
 
-    # qubit_state: 0=|g⟩, 1=|e⟩, 2=|f⟩
+    sideband_drive = _get_sideband_drive(node)
+    op = node.parameters.operation
+
+    # Cavity thermalization in clock cycles (computed once outside QUA loops).
+    if node.parameters.cavity_thermalization_time_ns is not None:
+        therm_clk = int(min(max(node.parameters.cavity_thermalization_time_ns // 4, 4), 2_500_000_000))
+    else:
+        cav_mode = next(
+            (getattr(cav, node.parameters.mode_name, None)
+             for cav in node.machine.cavities.values()
+             if getattr(cav, node.parameters.mode_name, None) is not None),
+            None,
+        )
+        therm_clk = int(min(max(
+            cav_mode.T1 * cav_mode.thermalization_time_factor * 1e9 / 4, 4
+        ), 2_500_000_000)) if cav_mode is not None else 4
+
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
-        "qubit_state": xr.DataArray([0, 1, 2], attrs={"long_name": "qubit state"}),
-        "detuning": xr.DataArray(dfs, attrs={"long_name": "resonator detuning", "units": "Hz"}),
+        "duration_cc": xr.DataArray(
+            durations_cc, attrs={"long_name": "f0g1 pulse duration", "units": "clock cycles"}
+        ),
     }
 
     with program() as node.namespace["qua_program"]:
-        I, I_st, Q, Q_st, n, n_st = node.machine.declare_qua_variables()
-        df = declare(int)
+        n = declare(int)
+        t = declare(int)
+        n_st = declare_stream()
+
+        if node.parameters.use_state_discrimination:
+            state = [declare(int) for _ in range(num_qubits)]
+            state_st = [declare_stream() for _ in range(num_qubits)]
+        else:
+            I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
 
         for multiplexed_qubits in qubits.batch():
             for qubit in multiplexed_qubits.values():
@@ -99,60 +133,48 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
 
-                # ── |g⟩ sweep ──────────────────────────────────────────────
-                with for_(*from_array(df, dfs)):
+                with for_(*from_array(t, durations_cc)):
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.resonator.update_frequency(
-                            qubit.resonator.intermediate_frequency + df
-                        )
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
-                    align()
-
-                # ── |e⟩ sweep ──────────────────────────────────────────────
-                with for_(*from_array(df, dfs)):
-                    for i, qubit in multiplexed_qubits.items():
-                        qubit.xy.wait(qubit.thermalization_time * u.ns)
+                        # Prepare |f>: pi_ge then pi_ef
+                        qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
                         qubit.xy.play("x180")
-                        qubit.resonator.update_frequency(
-                            qubit.resonator.intermediate_frequency + df
-                        )
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
-                    align()
-
-                # ── |f⟩ sweep ──────────────────────────────────────────────
-                with for_(*from_array(df, dfs)):
-                    for i, qubit in multiplexed_qubits.items():
-                        qubit.xy.wait(qubit.thermalization_time * u.ns)
-                        # Prepare |e⟩
-                        qubit.xy.play("x180")
-                        # Switch to EF frequency and prepare |f⟩
                         qubit.xy.update_frequency(
-                            qubit.xy.intermediate_frequency + int(qubit.anharmonicity)
+                            qubit.xy.intermediate_frequency + qubit.anharmonicity
                         )
                         qubit.xy.play("EF_x180")
-                        # Reset xy to GE frequency
-                        qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
-                        qubit.resonator.update_frequency(
-                            qubit.resonator.intermediate_frequency + df
-                        )
+
+                        # f0g1 drive with swept duration
+                        align(qubit.xy.name, sideband_drive.name)
+                        sideband_drive.play(op, duration=t)
+
+                        # Back-swap (ef tone still set)
+                        align(sideband_drive.name, qubit.xy.name)
+                        qubit.xy.play("EF_x180")
+
+                        # Measure
+                        align(qubit.xy.name, qubit.resonator.name)
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
+                        if node.parameters.use_state_discrimination:
+                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
+                            save(state[i], state_st[i])
+                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
+
+                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        # Thermalise cavity and qubit after each point.
+                        sideband_drive.wait(therm_clk)
+                        qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
+
                     align()
 
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
-                # buffer: [qubit_state=3, detuning=len(dfs)]
-                I_st[i].buffer(3, len(dfs)).average().save(f"I{i + 1}")
-                Q_st[i].buffer(3, len(dfs)).average().save(f"Q{i + 1}")
+                I_st[i].buffer(len(durations_cc)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(durations_cc)).average().save(f"Q{i + 1}")
+                if node.parameters.use_state_discrimination:
+                    state_st[i].buffer(len(durations_cc)).average().save(f"state{i + 1}")
 
 
 # %% {Simulate}
@@ -208,32 +230,28 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
 # %% {Plot_data}
 @node.run_action(skip_if=node.parameters.simulate)
 def plot_data(node: QualibrationNode[Parameters, Quam]):
-    import matplotlib.pyplot as plt
     fig = plot_raw_data_with_fit(
         node.results["ds_raw"],
         node.namespace["qubits"],
-        {k: type("FP", (), v)() for k, v in node.results["fit_results"].items()},
+        node.results["ds_fit"],
+        fit_results=node.results["fit_results"],
+        mode_name=node.parameters.mode_name,
     )
     plt.show()
-    node.results["figures"] = {"dispersive_shift_gef": fig}
+    node.results["figures"] = {"f0g1_time_rabi": fig}
 
 
 # %% {Update_state}
 @node.run_action(skip_if=node.parameters.simulate)
 def update_state(node: QualibrationNode[Parameters, Quam]):
+    sideband_drive = _get_sideband_drive(node)
+    op = node.parameters.operation
     with node.record_state_updates():
         for q in node.namespace["qubits"]:
             if node.outcomes[q.name] == "failed":
                 continue
-            res = node.results["fit_results"][q.name]
-            # Set readout to f_resonator(|e⟩) for maximum |g⟩/|e⟩ contrast
-            q.resonator.RF_frequency = res["f_optimal"]
-            # Store chi_ge if attribute exists
-            if hasattr(q, "chi"):
-                q.chi = res["chi_ge_hz"]
-            # Store chi_ef if attribute exists (SrfTransmon)
-            if hasattr(q, "chi_ef"):
-                q.chi_ef = res["chi_ef_hz"]
+            pi_duration_ns = node.results["fit_results"][q.name]["pi_duration_ns"]
+            sideband_drive.operations[op].length = int(round(pi_duration_ns))
 
 
 # %% {Save_results}

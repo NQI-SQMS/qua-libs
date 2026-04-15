@@ -215,22 +215,21 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     # Measure resonator state after the sequence
                     align()
 
+                    qubit.resonator.measure("readout", qua_vars=(I[0], Q[0]))
+                    save(I[0], I_st[0])
+                    save(Q[0], Q_st[0])
                     if node.parameters.use_state_discrimination:
-                        qubit.readout_state(state[0])
+                        assign(state[0], Cast.to_int(I[0] > qubit.resonator.operations["readout"].threshold))
                         save(state[0], state_st[0])
-                    else:
-                        qubit.resonator.measure("readout", qua_vars=(I[0], Q[0]))
-                        save(I[0], I_st[0])
-                        save(Q[0], Q_st[0])
+                        wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
 
         with stream_processing():
             # for the progress counter
             n_st.save("n")
+            I_st[0].buffer(len(frames)).buffer(cryoscope_len).average().save("I1")
+            Q_st[0].buffer(len(frames)).buffer(cryoscope_len).average().save("Q1")
             if node.parameters.use_state_discrimination:
                 state_st[0].buffer(len(frames)).buffer(cryoscope_len).average().save("state1")
-            else:
-                I_st[0].buffer(len(frames)).buffer(cryoscope_len).average().save("I1")
-                Q_st[0].buffer(len(frames)).buffer(cryoscope_len).average().save("Q1")
 
 
 # %% {Simulate}

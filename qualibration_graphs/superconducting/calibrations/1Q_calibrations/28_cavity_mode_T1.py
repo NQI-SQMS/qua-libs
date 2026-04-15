@@ -76,7 +76,7 @@ class Parameters(
 
 
 node = QualibrationNode[Parameters, Quam](
-    name="11_cavity_mode_T1",
+    name="28_cavity_mode_T1",
     description=description,
     parameters=Parameters(),
 )
@@ -122,11 +122,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         t = declare(int)
         n_st = declare_stream()
 
+        I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
         if node.parameters.use_state_discrimination:
             state = [declare(int) for _ in range(num_qubits)]
             state_st = [declare_stream() for _ in range(num_qubits)]
-        else:
-            I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
 
         for multiplexed_qubits in qubits.batch():
             for qubit in multiplexed_qubits.values():
@@ -172,13 +171,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                         # ── 7. Measure ──────────────────────────────────────────
                         align(qubit.xy.name, qubit.resonator.name)
+                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                        save(I[i], I_st[i])
+                        save(Q[i], Q_st[i])
                         if node.parameters.use_state_discrimination:
-                            qubit.readout_state(state[i])
+                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        else:
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
+                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
 
                         qubit.resonator.wait(node.machine.depletion_time * u.ns)
                         qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
@@ -188,11 +187,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
+                I_st[i].buffer(len(idle_times)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(idle_times)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
                     state_st[i].buffer(len(idle_times)).average().save(f"state{i + 1}")
-                else:
-                    I_st[i].buffer(len(idle_times)).average().save(f"I{i + 1}")
-                    Q_st[i].buffer(len(idle_times)).average().save(f"Q{i + 1}")
 
 
 # %% {Simulate}

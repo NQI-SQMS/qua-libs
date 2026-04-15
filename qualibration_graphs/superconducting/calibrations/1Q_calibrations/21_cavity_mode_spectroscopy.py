@@ -60,7 +60,7 @@ State update:
     - cavity_mode.cavity_mode_drive.RF_frequency  [Hz]
 """
 
-node = QualibrationNode[Parameters, Quam](name="02_cavity_mode_spectroscopy", description=description, parameters=Parameters())
+node = QualibrationNode[Parameters, Quam](name="21_cavity_mode_spectroscopy", description=description, parameters=Parameters())
 
 
 @node.run_action(skip_if=node.modes.external)
@@ -113,11 +113,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         f = declare(int)
         n_st = declare_stream()
 
+        I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
         if node.parameters.use_state_discrimination:
             state = [declare(int) for _ in range(num_qubits)]
             state_st = [declare_stream() for _ in range(num_qubits)]
-        else:
-            I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
 
         for multiplexed_qubits in qubits.batch():
             for qubit in multiplexed_qubits.values():
@@ -167,15 +166,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                         # Measure
                         align(qubit.xy.name, qubit.resonator.name)
+                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                        save(I[i], I_st[i])
+                        save(Q[i], Q_st[i])
                         if node.parameters.use_state_discrimination:
-                            qubit.readout_state(state[i])
+                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        else:
-                            qubit.resonator.measure(
-                                "readout", qua_vars=(I[i], Q[i])
-                            )
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
+                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
 
                         # Reverse the cavity displacement (de-excite residual photons).
                         align(qubit.resonator.name, cavity_mode.cavity_mode_drive.name)
@@ -190,11 +187,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
+                I_st[i].buffer(len(dfs)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(dfs)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
                     state_st[i].buffer(len(dfs)).average().save(f"state{i + 1}")
-                else:
-                    I_st[i].buffer(len(dfs)).average().save(f"I{i + 1}")
-                    Q_st[i].buffer(len(dfs)).average().save(f"Q{i + 1}")
 
 
 # %% {Simulate}
@@ -241,7 +237,7 @@ def load_data(node: QualibrationNode[Parameters, Quam]):
 def analyse_data(node: QualibrationNode[Parameters, Quam]):
     """Fit the cavity resonance dip and extract the cavity frequency."""
     node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
-    node.results["ds_raw"], fit_results = fit_raw_data(node.results["ds_raw"], node)
+    node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}
 
     log_fitted_results(node.results["fit_results"], log_callable=node.log)
@@ -256,7 +252,7 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
 def plot_data(node: QualibrationNode[Parameters, Quam]):
     """Plot qubit excitation vs cavity drive frequency with Lorentzian dip fit."""
     fig = plot_raw_data_with_fit(
-        node.results["ds_raw"],
+        node.results["ds_fit"],
         node.namespace["qubits"],
         fit_results=node.results["fit_results"],
         mode_name=node.parameters.mode_name,

@@ -258,13 +258,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             align()
                             # Readout the qubits
                             for i, qubit in multiplexed_qubits.items():
+                                qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                                save(I[i], I_st[i])
+                                save(Q[i], Q_st[i])
                                 if node.parameters.use_state_discrimination:
-                                    qubit.readout_state(state[i])
+                                    assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                     save(state[i], state_st[i])
-                                else:
-                                    qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                                    save(I[i], I_st[i])
-                                    save(Q[i], Q_st[i])
+                                    wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
                             align()
                         # Go to the next depth
                         assign(depth_target, depth_target + 2 * delta_clifford)

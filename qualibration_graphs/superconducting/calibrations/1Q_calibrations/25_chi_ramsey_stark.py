@@ -72,12 +72,11 @@ Analysis
 
 State updates
 -------------
-  • cavity_mode.chi                    [Hz]
   • cavity_transmon_pairs[key].chi     [Hz]
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="08_chi_ramsey_stark",
+    name="25_chi_ramsey_stark",
     description=description,
     parameters=Parameters(),
 )
@@ -175,11 +174,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         drive_amp = declare(fixed)
         tau_clk_v = declare(int)
 
+        I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
         if node.parameters.use_state_discrimination:
             state    = [declare(int)         for _ in range(num_qubits)]
             state_st = [declare_stream()     for _ in range(num_qubits)]
-        else:
-            I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
 
         for multiplexed_qubits in qubits.batch():
             for qubit in multiplexed_qubits.values():
@@ -257,15 +255,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         # ── Measure ───────────────────────────────────────────
                         for i, qubit in multiplexed_qubits.items():
                             align(qubit.xy.name, qubit.resonator.name)
+                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                            save(I[i], I_st[i])
+                            save(Q[i], Q_st[i])
                             if node.parameters.use_state_discrimination:
-                                qubit.readout_state(state[i])
+                                assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                            else:
-                                qubit.resonator.measure(
-                                    "readout", qua_vars=(I[i], Q[i])
-                                )
-                                save(I[i], I_st[i])
-                                save(Q[i], Q_st[i])
+                                wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
                             qubit.resonator.wait(node.machine.depletion_time * u.ns)
 
                         # ── Wait for cavity CW drive to finish ───────────────
@@ -277,11 +273,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             n_st.save("n")
             for i in range(num_qubits):
                 # Buffer order must match loop order: inner=tau, outer=amplitude
+                I_st[i].buffer(n_tau).buffer(n_amp).average().save(f"I{i + 1}")
+                Q_st[i].buffer(n_tau).buffer(n_amp).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
                     state_st[i].buffer(n_tau).buffer(n_amp).average().save(f"state{i + 1}")
-                else:
-                    I_st[i].buffer(n_tau).buffer(n_amp).average().save(f"I{i + 1}")
-                    Q_st[i].buffer(n_tau).buffer(n_amp).average().save(f"Q{i + 1}")
 
 
 # %% {Simulate}
@@ -333,7 +328,7 @@ def load_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def analyse_data(node: QualibrationNode[Parameters, Quam]):
     node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
-    _, fit_results = fit_raw_data(node.results["ds_raw"], node)
+    node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}
     log_fitted_results(fit_results, log_callable=node.log)
     node.outcomes = {
@@ -361,10 +356,9 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
 # %% {Update_state}
 @node.run_action(skip_if=node.parameters.simulate)
 def update_state(node: QualibrationNode[Parameters, Quam]):
-    """Write χ to cavity_mode.chi and the corresponding CavityTransmonPair."""
-    mode_name    = node.parameters.mode_name
-    cavity_mode  = node.namespace["cavity_mode"]
-    fit_results  = {
+    """Write χ to the corresponding CavityTransmonPair."""
+    mode_name   = node.parameters.mode_name
+    fit_results = {
         k: RamseyStarkFit(**v) for k, v in node.results["fit_results"].items()
     }
 
@@ -375,7 +369,6 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 continue
 
             chi_hz = float(res.chi_hz)
-            cavity_mode.chi = chi_hz
 
             pair_key = f"{qubit.name}_{mode_name}"
             pairs = getattr(node.machine, "cavity_transmon_pairs", None)

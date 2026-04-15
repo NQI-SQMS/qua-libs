@@ -10,10 +10,12 @@ Procedure:
   2. Compute n̄ = Σ n·P(n) from fitted distribution.
   3. Fit n̄(A) = k·A² to obtain calibration constant k.
   4. A₁ph = 1/√k is the displacement amplitude that deposits exactly 1 photon on average.
-  5. chi_hz is the mean peak spacing (= 2χ) averaged across all amplitudes where peaks are visible.
+  5. chi_hz = peak_spacing / 2 = χ/(2π) [Hz] is the Hamiltonian coupling constant,
+     averaged across all amplitudes where peaks are visible.
+
+Convention: chi = χ/(2π) [Hz] in H/ħ = χ a†a σz.  Peak spacing = 2*chi.
 
 State updates:
-  - cavity_mode.chi = chi_hz
   - cavity_mode.cavity_mode_drive.operations["displacement"].amplitude = amp_for_one_photon
   - CavityTransmonPair.chi = chi_hz
   - CavityTransmonPair.displacement_k = k
@@ -168,7 +170,7 @@ def _extract_nbar_and_chi(popt: np.ndarray, n_peaks: int) -> Tuple[float, float]
     positions_sorted = np.sort(positions)
     if len(positions_sorted) >= 2:
         spacings = np.diff(positions_sorted)
-        chi_hz = float(np.mean(spacings))
+        chi_hz = float(np.mean(spacings)) / 2.0  # peak_spacing/2 = χ/(2π)
     else:
         chi_hz = float("nan")
 

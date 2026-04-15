@@ -1,9 +1,13 @@
-"""Analysis for photon number splitting (node 29).
+"""Analysis for photon number resolved spectroscopy (node 29).
 
 Sweeps qubit ge frequency with selective_x180 to resolve photon-number-split peaks.
-Auto-detects number of peaks by fitting increasing Gaussians (shared sigma, like
-Taeyoon's approach) until chi² < threshold.  Peak spacing = chi (dispersive shift).
+Auto-detects number of peaks by fitting increasing Gaussians with shared sigma
+until chi² < threshold.  Peak spacing = 2*chi (dispersive shift).
 Normalised peak amplitudes give P(n) directly.
+
+Convention: chi = χ/(2π) [Hz] — the Hamiltonian coupling constant in H/ħ = χ a†a σz.
+The per-photon qubit frequency shift is 2*chi; PNRS peak spacing = 2*chi.
+chi = peak_spacing / 2 is stored in the machine state.
 """
 import logging
 from dataclasses import dataclass
@@ -18,18 +22,27 @@ from qualibration_libs.data import convert_IQ_to_V
 
 @dataclass
 class FitParameters:
-    """Fit results for a single qubit's photon number splitting measurement."""
+    """Fit results for a single qubit's photon number resolved spectroscopy measurement."""
     chi_hz: float
-    """Mean peak spacing = dispersive shift chi [Hz]."""
+    """Dispersive shift χ/(2π) [Hz] (Hamiltonian coupling constant).
+    Peak spacing = 2 * chi_hz."""
     peak_positions_hz: List[float]
-    """Detuning positions of photon-number peaks [Hz]."""
+    """Detuning positions of photon-number peaks [Hz], ordered n=0, n=1, n=2, ...
+    (most positive detuning first, i.e. index 0 ≈ 0 detuning = vacuum peak)."""
     peak_amplitudes: List[float]
-    """Raw fitted amplitude of each Gaussian peak."""
+    """Raw fitted amplitude of each Gaussian peak, ordered n=0, n=1, n=2, ..."""
     peak_probabilities: List[float]
-    """Normalised photon-number probabilities P(n) = A_n / sum(A_i)."""
+    """Normalised photon-number probabilities P(n) = A_n / sum(A_i),
+    ordered n=0, n=1, n=2, ... so index matches photon number."""
     num_peaks_used: int
     """Number of Gaussian peaks detected by the auto-fitting routine."""
     success: bool
+    sigma_hz: float = float("nan")
+    """Shared Gaussian sigma (1-σ half-width) [Hz]."""
+    offset: float = float("nan")
+    """Fitted baseline P(e) floor."""
+    nbar: float = float("nan")
+    """Mean photon number n̄ extracted by fitting P(n) to a Poisson distribution."""
 
 
 def log_fitted_results(fit_results: Dict, log_callable=None):
@@ -40,9 +53,12 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
         chi_khz = res["chi_hz"] * 1e-3 if np.isfinite(res["chi_hz"]) else float("nan")
         peaks_khz = [p * 1e-3 for p in res["peak_positions_hz"]]
         probs = [f"{p:.3f}" for p in res["peak_probabilities"]]
+        nbar = res.get("nbar", float("nan"))
+        nbar_str = f"{nbar:.3f}" if np.isfinite(nbar) else "nan"
         log_callable(
-            f"[29] {q}: {status} | chi = {chi_khz:.3f} kHz "
+            f"[24] {q}: {status} | chi = {chi_khz:.3f} kHz "
             f"| peaks = {res['num_peaks_used']} "
+            f"| n\u0304 = {nbar_str} "
             f"| positions (kHz) = {[f'{p:.3f}' for p in peaks_khz]} "
             f"| P(n) = {probs}"
         )
@@ -58,7 +74,7 @@ def _gaussian_sum_shared_sigma(x, sigma, offset, *amp_pos_pairs):
     """Sum of N Gaussians all sharing the same sigma.
 
     params layout (after sigma, offset):  amp_0, pos_0, amp_1, pos_1, ...
-    This mirrors Taeyoon's gaussian_sum_constparam convention.
+    Params layout (after sigma, offset): amp_0, pos_0, amp_1, pos_1, ...
     """
     result = np.full_like(x, float(offset), dtype=float)
     for i in range(len(amp_pos_pairs) // 2):
@@ -73,12 +89,25 @@ def _fit_spectrum_n(x: np.ndarray, y: np.ndarray, n_peaks: int) -> Optional[np.n
 
     Returns popt = [sigma, offset, amp_0, pos_0, amp_1, pos_1, ...] or None.
     """
+    from scipy.signal import find_peaks as _find_peaks
     try:
         y_smooth = np.convolve(y, np.ones(5) / 5, mode="same")
-        peak_indices = sorted(
-            np.argsort(y_smooth)[-n_peaks:].tolist(),
-            key=lambda i: x[i],
-        )
+        n_pts = len(x)
+        # Enforce spatial separation: peaks must be at least span/(n_peaks*4) apart.
+        min_dist = max(1, n_pts // (n_peaks * 4))
+        found, _ = _find_peaks(y_smooth, distance=min_dist)
+        if len(found) >= n_peaks:
+            # Take the n_peaks tallest among spatially-separated candidates
+            peak_indices = sorted(
+                sorted(found.tolist(), key=lambda i: y_smooth[i])[-n_peaks:],
+                key=lambda i: x[i],
+            )
+        else:
+            # Fallback: top-N from the full array (original behaviour)
+            peak_indices = sorted(
+                np.argsort(y_smooth)[-n_peaks:].tolist(),
+                key=lambda i: x[i],
+            )
         x_span = float(x[-1] - x[0])
         sigma0 = x_span / (n_peaks * 4)
         offset0 = float(np.min(y))
@@ -123,10 +152,21 @@ def _fit_spectrum_auto(
     best_n: int = 0
     best_chi2: float = np.inf
 
+    # Minimum acceptable peak amplitude: 3% of the data peak-to-peak range.
+    # Peaks below this threshold are indistinguishable from noise.
+    data_range = float(np.max(y) - np.min(y))
+    min_amp = 0.03 * data_range
+
     for n in range(1, max_peaks + 1):
         popt = _fit_spectrum_n(x, y, n)
         if popt is None:
             continue
+
+        # Reject if any fitted peak amplitude is below the noise floor
+        amps = [float(popt[2 + 2 * i]) for i in range(n)]
+        if any(a < min_amp for a in amps):
+            continue
+
         y_fit = _gaussian_sum_shared_sigma(x, *popt)
         a = float(np.max(y_fit) - np.min(y_fit))
         if a <= 0:
@@ -143,6 +183,31 @@ def _fit_spectrum_auto(
             break
 
     return best_popt, best_n
+
+
+def _fit_poisson_nbar(probs: List[float]) -> float:
+    """Fit a list of P(n) values to a Poisson distribution, return best-fit n̄.
+
+    Minimises sum of squared deviations between probs and Poisson(n, nbar).
+    Returns nan on failure.
+    """
+    from scipy.special import factorial
+    from scipy.optimize import minimize_scalar
+
+    n_vals = np.arange(len(probs))
+    p_obs = np.array(probs, dtype=float)
+
+    def residual(nbar):
+        if nbar <= 0:
+            return np.inf
+        p_fit = np.exp(-nbar) * nbar ** n_vals / factorial(n_vals)
+        return float(np.sum((p_obs - p_fit) ** 2))
+
+    try:
+        result = minimize_scalar(residual, bounds=(1e-6, 20.0), method="bounded")
+        return float(result.x) if result.success else float("nan")
+    except Exception:
+        return float("nan")
 
 
 def fit_raw_data(
@@ -162,26 +227,34 @@ def fit_raw_data(
 
         if popt is not None and n_detected > 0:
             # popt = [sigma, offset, amp_0, pos_0, amp_1, pos_1, ...]
-            amps = [float(popt[2 + 2 * i]) for i in range(n_detected)]
-            positions = sorted([float(popt[3 + 2 * i]) for i in range(n_detected)])
-            # Re-order amps to match sorted positions
             pos_unsorted = [float(popt[3 + 2 * i]) for i in range(n_detected)]
-            sort_idx = np.argsort(pos_unsorted)
-            amps_sorted = [amps[j] for j in sort_idx]
+            amps_unsorted = [float(popt[2 + 2 * i]) for i in range(n_detected)]
 
-            # Normalise to P(n)
+            # Sort ascending (most negative first) to compute chi from spacings
+            sort_idx_asc = np.argsort(pos_unsorted)
+            positions_asc = [pos_unsorted[j] for j in sort_idx_asc]
+            amps_asc = [amps_unsorted[j] for j in sort_idx_asc]
+
+            if len(positions_asc) >= 2:
+                spacings = [positions_asc[i + 1] - positions_asc[i]
+                            for i in range(len(positions_asc) - 1)]
+                chi_hz = float(np.mean(spacings)) / 2.0  # peak_spacing/2 = χ/(2π)
+            else:
+                chi_hz = float("nan")
+
+            # Reverse so index 0 = n=0 (vacuum, detuning ≈ 0, most positive position)
+            positions = positions_asc[::-1]
+            amps_sorted = amps_asc[::-1]
+
+            # Normalise to P(n); index 0 = P(n=0)
             total_amp = sum(max(a, 0.0) for a in amps_sorted)
             if total_amp > 0:
                 probs = [max(a, 0.0) / total_amp for a in amps_sorted]
             else:
                 probs = [1.0 / n_detected] * n_detected
 
-            if len(positions) >= 2:
-                spacings = [positions[i + 1] - positions[i]
-                            for i in range(len(positions) - 1)]
-                chi_hz = float(np.mean(spacings))
-            else:
-                chi_hz = float("nan")
+            # Fit P(n) to Poisson to extract mean photon number n̄
+            nbar = _fit_poisson_nbar(probs)
 
             success = bool(np.isfinite(chi_hz) and chi_hz > 0)
             fit_results[str(q)] = FitParameters(
@@ -191,6 +264,9 @@ def fit_raw_data(
                 peak_probabilities=probs,
                 num_peaks_used=n_detected,
                 success=success,
+                sigma_hz=float(popt[0]),
+                offset=float(popt[1]),
+                nbar=nbar,
             )
         else:
             fit_results[str(q)] = FitParameters(

@@ -81,6 +81,7 @@ def _make_rpm_program(qubits, amp_factors, num_qubits, n_avg, ef_op, u, start_fr
         a = declare(fixed)
         n_st = declare_stream()
 
+        I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
         state = [declare(int) for _ in range(num_qubits)]
         state_st = [declare_stream() for _ in range(num_qubits)]
 
@@ -115,7 +116,10 @@ def _make_rpm_program(qubits, amp_factors, num_qubits, n_avg, ef_op, u, start_fr
 
                         # Measure
                         align(qubit.xy.name, qubit.resonator.name)
-                        qubit.readout_state(state[i])
+                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                        save(I[i], I_st[i])
+                        save(Q[i], Q_st[i])
+                        assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                         save(state[i], state_st[i])
                         qubit.resonator.wait(node.machine.depletion_time * u.ns)
 
@@ -124,6 +128,8 @@ def _make_rpm_program(qubits, amp_factors, num_qubits, n_avg, ef_op, u, start_fr
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
+                I_st[i].buffer(len(amp_factors)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(amp_factors)).average().save(f"Q{i + 1}")
                 state_st[i].buffer(len(amp_factors)).average().save(f"state{i + 1}")
 
     return qua_prog

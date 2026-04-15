@@ -8,13 +8,7 @@ from calibration_utils.T1_thermal_monitor.analysis import IterResult
 
 
 def _scaled_time(t_sec: np.ndarray) -> Tuple[np.ndarray, str]:
-    """Auto-scale elapsed time array to the most readable unit.
-
-    Rules:
-      total < 120 s    → seconds
-      120 s – 7200 s   → minutes
-      > 7200 s         → hours
-    """
+    """Auto-scale elapsed time array to the most readable unit."""
     total = float(np.nanmax(t_sec)) if t_sec.size > 0 else 0.0
     if total < 120.0:
         return t_sec, "Elapsed time (s)"
@@ -30,8 +24,10 @@ def plot_T1_thermal_monitor(
 ) -> Figure:
     """Two-panel time-trace figure per qubit: T1 on top, P_th on bottom.
 
-    The time axis is automatically scaled to seconds / minutes / hours
-    depending on the total experiment duration.
+    T1 is shown with fit error bars.
+    P_th is shown with 1-σ error bars from lmfit covariance propagation.
+    When P_th_err is NaN (P_th too small for reliable error), the point is
+    plotted without error bar.
     """
     n_qubits = max(len(iter_results), 1)
     fig, axes = plt.subplots(
@@ -58,6 +54,7 @@ def plot_T1_thermal_monitor(
         T1 = np.array(res.T1_us)
         T1_err = np.array(res.T1_error_us)
         P_th_pct = np.array(res.P_th) * 100.0
+        P_th_err_pct = np.array(res.P_th_err) * 100.0  # NaN when unreliable
 
         t_scaled, t_label = _scaled_time(t_raw)
 
@@ -81,16 +78,30 @@ def plot_T1_thermal_monitor(
         # ── P_th panel ────────────────────────────────────────────────────────
         valid_Pth = np.isfinite(P_th_pct)
         if valid_Pth.any():
-            ax_Pth.plot(
-                t_scaled[valid_Pth], P_th_pct[valid_Pth],
-                "s", ms=4, color="C1", alpha=0.8,
-                label=f"P_th (n={valid_Pth.sum()})",
-            )
+            # Split into points with and without reliable error bars
+            has_err = valid_Pth & np.isfinite(P_th_err_pct)
+            no_err  = valid_Pth & ~np.isfinite(P_th_err_pct)
+
+            if has_err.any():
+                ax_Pth.errorbar(
+                    t_scaled[has_err], P_th_pct[has_err],
+                    yerr=P_th_err_pct[has_err],
+                    fmt="s", ms=4, lw=0.8, capsize=2, color="C1", alpha=0.8,
+                    label=f"P_th ± 1σ (n={has_err.sum()})",
+                )
+            if no_err.any():
+                ax_Pth.plot(
+                    t_scaled[no_err], P_th_pct[no_err],
+                    "v", ms=4, color="C1", alpha=0.5, mfc="none",
+                    label=f"P_th (err N/A, n={no_err.sum()})",
+                )
+
             mean_Pth = float(np.nanmean(P_th_pct[valid_Pth]))
             ax_Pth.axhline(
                 mean_Pth, color="C3", ls="--", lw=1.2,
                 label=f"mean = {mean_Pth:.3f}%",
             )
+
         ax_Pth.set_ylabel("Thermal population (%)")
         ax_Pth.set_xlabel(t_label)
         ax_Pth.legend(fontsize=8)

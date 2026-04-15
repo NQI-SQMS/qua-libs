@@ -8,8 +8,8 @@ class NodeSpecificParameters(RunnableParameters):
     """Number of averages per sweep point."""
     min_amp_factor: float = 0.0
     """Minimum EF amplitude scale factor (0 = no rotation)."""
-    max_amp_factor: float = 2.0
-    """Maximum EF amplitude scale factor (2 = two full Rabi oscillations)."""
+    max_amp_factor: float = 4.0
+    """Maximum EF amplitude scale factor (4 = two full Rabi oscillations)."""
     amp_factor_step: float = 0.02
     """Step size for the amplitude scale sweep."""
     ef_operation: str = "EF_x180"

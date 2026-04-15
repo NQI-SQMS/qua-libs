@@ -38,8 +38,12 @@ class NodeSpecificParameters(RunnableParameters):
     """Frequency step [MHz]."""
     max_peaks: int = 8
     """Maximum number of photon-number peaks to try when fitting."""
-    chi2_threshold: float = 2.0
-    """Reduced chi² threshold for accepting a multi-Gaussian fit."""
+    chi2_threshold: float = 0.005
+    """Reduced chi² threshold for stopping peak search.  The auto-fitter adds
+    peaks until chi² drops below this value.  Lower values force more peaks to
+    be tried before stopping; raise if over-fitting noise, lower if weak peaks
+    are missed.  The 3% amplitude floor in the fitter already prevents purely
+    spurious peaks from being accepted."""
     qubit_pulse: str = "selective_x180"
     """Qubit pulse operation to use for spectroscopy.
     Typical choices: 'selective_x180' (narrow-bandwidth, resolves photon-number peaks)
