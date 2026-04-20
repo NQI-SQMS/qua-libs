@@ -206,6 +206,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         save(Q_f[i][ind], Qf_st[i])
                     qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
 
+                align()
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):

@@ -14,7 +14,7 @@ import numpy as np
 import xarray as xr
 
 from qualibrate import QualibrationNode
-from qualibration_libs.data import convert_IQ_to_V
+from qualibration_libs.data import convert_IQ_to_V, apply_confusion_correction_to_dataset
 from qualibration_libs.analysis import fit_oscillation_decay_exp
 
 
@@ -45,6 +45,8 @@ def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
     """Convert I/Q to Volts if not using state discrimination."""
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, node.namespace["qubits"])
+    else:
+        ds = apply_confusion_correction_to_dataset(ds, node)
     return ds
 
 

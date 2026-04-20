@@ -214,14 +214,14 @@ def plot_individual_confusion_matrix(ax: Axes, ds: xr.Dataset, qubit: dict[str, 
     - If the fit dataset is provided, the fitted curve is plotted along with the raw data.
     """
 
-    confusion = np.array([[float(fit.gg), float(fit.ge)], [float(fit.eg), float(fit.ee)]])
+    confusion = np.array([[float(fit.gg), float(fit.eg)], [float(fit.ge), float(fit.ee)]])
     ax.imshow(confusion)
     ax.set_xticks([0, 1])
     ax.set_yticks([0, 1])
     ax.set_xticklabels(labels=["|g>", "|e>"])
     ax.set_yticklabels(labels=["|g>", "|e>"])
-    ax.set_ylabel("Prepared")
-    ax.set_xlabel("Measured")
+    ax.set_ylabel("Measured")
+    ax.set_xlabel("Prepared")
     ax.text(0, 0, f"{100 * confusion[0][0]:.1f}%", ha="center", va="center", color="k")
     ax.text(1, 0, f"{100 * confusion[0][1]:.1f}%", ha="center", va="center", color="w")
     ax.text(0, 1, f"{100 * confusion[1][0]:.1f}%", ha="center", va="center", color="w")

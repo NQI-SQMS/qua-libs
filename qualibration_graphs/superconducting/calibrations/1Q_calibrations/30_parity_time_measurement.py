@@ -50,7 +50,8 @@ For each delay τ:
 
   1. Reset cavity and qubit.
   2. Apply a short displacement pulse (displacement_scale ≈ 0.5, n̄ ≈ 1 photon).
-  3. Ramsey:  y90 → wait(τ) → y90
+  3. Ramsey:  selective_y90 → wait(τ) → selective_y90
+     (selective_y90 = frame_rotation(+π/2) · selective_x180/2 · frame_rotation(−π/2))
   4. Measure qubit state.
 
 P(e) oscillates primarily at f_χ = χ_eff/(2π) (n=1 term dominates for n̄ ≈ 1).
@@ -59,6 +60,9 @@ A damped-cosine fit extracts f_χ and τ_parity = 1/(2·f_χ).
 State updates
 -------------
   • cavity_transmon_pairs["{qubit}_{mode}"].parity_time   [seconds]
+  • cavity_transmon_pairs["{qubit}_{mode}"].chi           [Hz]
+    chi = chi_eff_hz / 2  (Hamiltonian convention: per-photon shift = 2·chi)
+    chi_eff_hz is the Ramsey oscillation frequency ≈ PNRS peak spacing (n=0→1).
 """
 
 node = QualibrationNode[Parameters, Quam](
@@ -102,10 +106,14 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     # Resolve sideband_drive for optional active cavity cooling
     mode_name = node.parameters.mode_name
     sideband_drive = None
+    alpha_max = 1.0
     pairs = getattr(node.machine, "cavity_transmon_pairs", {})
     for pair_key, pair in pairs.items():
-        if pair_key.endswith(f"_{mode_name}") and getattr(pair, "sideband_drive", None) is not None:
-            sideband_drive = pair.sideband_drive
+        if pair_key.endswith(f"_{mode_name}"):
+            if getattr(pair, "sideband_drive", None) is not None:
+                sideband_drive = pair.sideband_drive
+            if getattr(pair, "displacement_alpha_max", None) is not None:
+                alpha_max = float(pair.displacement_alpha_max)
             break
     node.namespace["sideband_drive"] = sideband_drive
 
@@ -129,7 +137,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         ),
     }
 
-    disp_scale = float(node.parameters.displacement_scale)
+    disp_scale = float(node.parameters.displacement_scale) / alpha_max
     n_avg = node.parameters.num_shots
 
     with program() as node.namespace["qua_program"]:
@@ -179,16 +187,20 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         "displacement", amplitude_scale=disp_scale
                     )
 
-                    # ── Parity Ramsey: y90 → wait(τ) → y90 ───────────────────
-                    # Uses y90 (not x90) to match the Wigner tomography pulse
-                    # sequence, so AC Stark effects are identical.
+                    # ── Parity Ramsey: selective_y90 → wait(τ) → selective_y90 ──
+                    # selective_y90 = frame_rotation(+π/2) · selective_x180/2 · frame_rotation(−π/2)
+                    # Restoring the frame after each half-pulse preserves phase coherence.
                     for i, qubit in multiplexed_qubits.items():
                         align(cavity_mode.cavity_mode_drive.name, qubit.xy.name)
-                        qubit.xy.play("y90")
+                        qubit.xy.frame_rotation_2pi(0.25)
+                        qubit.xy.play("selective_x180", amplitude_scale=0.5)
+                        qubit.xy.frame_rotation_2pi(-0.25)
                     for i, qubit in multiplexed_qubits.items():
                         wait(tau_clk_v, qubit.xy.name)
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.xy.play("y90")
+                        qubit.xy.frame_rotation_2pi(0.25)
+                        qubit.xy.play("selective_x180", amplitude_scale=0.5)
+                        qubit.xy.frame_rotation_2pi(-0.25)
 
                     # ── Measure ───────────────────────────────────────────────
                     for i, qubit in multiplexed_qubits.items():
@@ -204,10 +216,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                 ),
                             )
                             save(state[i], state_st[i])
-                            wait(qubit.resonator.depletion_time // 4,
-                                 qubit.resonator.name)
                         qubit.resonator.wait(node.machine.depletion_time * u.ns)
 
+                    align()
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
@@ -310,9 +321,12 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             pairs = getattr(node.machine, "cavity_transmon_pairs", None)
             if pairs is not None and pair_key in pairs:
                 pairs[pair_key].parity_time = float(res.parity_time_s)
+                # chi_eff_hz is the Ramsey oscillation frequency = PNRS peak spacing (n=0→1)
+                # pair.chi uses the Hamiltonian convention: per-photon shift = 2·pair.chi
+                pairs[pair_key].chi = float(res.chi_eff_hz / 2.0)
                 node.log(
-                    f"Updated {pair_key}.parity_time = "
-                    f"{res.parity_time_s * 1e9:.0f} ns"
+                    f"Updated {pair_key}.parity_time = {res.parity_time_s * 1e9:.0f} ns  |  "
+                    f"chi = {res.chi_eff_hz / 2e3:.2f} kHz"
                 )
             else:
                 logger.warning(

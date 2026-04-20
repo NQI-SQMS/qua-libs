@@ -15,14 +15,14 @@ def plot_parity_time(
     fit_results: Dict[str, ParityTimeFit],
     mode_name: str = "alice",
 ) -> plt.Figure:
-    """Plot P_e(τ) Ramsey traces with damped-cosine fit overlay.
+    """Plot P_e(τ) Ramsey traces with FFT spectrum.
 
-    Left panel  — raw P(e) trace with fit curve; parity time marked.
-    Right panel — residuals (data − fit).
+    Left panel  — raw signal trace with τ_parity marked.
+    Right panel — FFT magnitude spectrum with χ_eff peak marked.
 
     Parameters
     ----------
-    dataset      : xr.Dataset         Fit dataset (contains ``P_e_fit``).
+    dataset      : xr.Dataset         Dataset with delay coordinate.
     qubits       : Qubits             Active qubit collection.
     fit_results  : dict               Output of ``fit_raw_data``.
     mode_name    : str                Cavity mode label for titles.
@@ -39,11 +39,12 @@ def plot_parity_time(
 
     for i, qubit in enumerate(qubits):
         ax_trace = axes[i, 0]
-        ax_resid = axes[i, 1]
+        ax_fft   = axes[i, 1]
         res = fit_results.get(qubit.name)
 
         # ── Extract measured signal ───────────────────────────────────────────
         raw = None
+        signal_key = None
         for key in [f"state{i + 1}", "state", f"I{i + 1}", "I"]:
             if key in dataset:
                 try:
@@ -53,51 +54,32 @@ def plot_parity_time(
                         if "qubit" in da.dims
                         else da.values
                     )
+                    signal_key = key
                     break
                 except Exception:
                     pass
         if raw is None:
             raw = np.full(len(tau_ns), np.nan)
         raw = np.asarray(raw, dtype=float).ravel()[: len(tau_ns)]
+        using_iq = signal_key is not None and signal_key.startswith("I")
 
-        # ── Extract fitted curve ──────────────────────────────────────────────
-        fit_curve = np.full(len(tau_ns), np.nan)
-        if "P_e_fit" in dataset:
-            try:
-                da_fit = dataset["P_e_fit"]
-                fit_curve = (
-                    da_fit.sel(qubit=qubit.name).values
-                    if "qubit" in da_fit.dims
-                    else da_fit.values
-                ).ravel()[: len(tau_ns)]
-            except Exception:
-                pass
-
-        # ── Left: trace + fit ─────────────────────────────────────────────────
+        # ── Left: trace ───────────────────────────────────────────────────────
         ax_trace.plot(tau_us, raw, "o", ms=3, color="steelblue",
                       alpha=0.7, label="Data")
-        if np.any(np.isfinite(fit_curve)):
-            ax_trace.plot(tau_us, fit_curve, "-", lw=2.0, color="tomato",
-                          label="Damped-cosine fit")
 
-        # Mark parity time
         if res is not None and res.success:
             tau_parity_us = res.parity_time_s * 1e6
             ax_trace.axvline(tau_parity_us, color="forestgreen", lw=1.5, ls="--",
                              label=f"τ_parity = {tau_parity_us * 1e3:.0f} ns")
-            # Draw vertical lines at all integer multiples within the sweep range
             for k in range(2, 10):
                 t_k = k * tau_parity_us
                 if t_k <= tau_us[-1]:
                     ax_trace.axvline(t_k, color="forestgreen", lw=0.6,
                                      ls=":", alpha=0.5)
 
-        # Annotation box
-        if res is not None and res.success:
             ann = (
                 f"χ_eff/(2π) = {res.chi_eff_hz / 1e3:.1f} kHz\n"
-                f"τ_parity   = {res.parity_time_s * 1e9:.0f} ns\n"
-                f"T2*        = {res.T2_star_ns / 1e3:.1f} µs"
+                f"τ_parity   = {res.parity_time_s * 1e9:.0f} ns"
             )
             ax_trace.text(
                 0.97, 0.97, ann,
@@ -107,35 +89,43 @@ def plot_parity_time(
             )
         elif res is not None:
             ax_trace.text(
-                0.5, 0.5, f"Fit failed\n{res.message}",
+                0.5, 0.5, f"FFT peak not found\n{res.message}",
                 transform=ax_trace.transAxes, ha="center", va="center",
                 fontsize=10, color="firebrick",
             )
 
         ax_trace.set_xlabel("Ramsey wait time (µs)")
-        ax_trace.set_ylabel("P(|e⟩)")
+        ax_trace.set_ylabel("I (V)" if using_iq else "P(|e⟩)")
         ax_trace.set_title(
             f"{qubit.name} · {mode_name}: Parity-time Ramsey\n"
-            f"(y90 → wait(τ) → y90, cavity displaced)"
+            f"(selective_y90 → wait(τ) → selective_y90, cavity displaced)"
         )
         ax_trace.legend(fontsize=9, loc="lower right")
-        ax_trace.set_ylim(-0.05, 1.05)
+        if not using_iq:
+            ax_trace.set_ylim(-0.05, 1.05)
 
-        # ── Right: residuals ──────────────────────────────────────────────────
-        resid = raw - fit_curve
-        ax_resid.plot(tau_us, resid, "o-", ms=2, lw=0.8, color="slategrey")
-        ax_resid.axhline(0.0, color="k", lw=0.7, ls="--")
-        ax_resid.set_xlabel("Ramsey wait time (µs)")
-        ax_resid.set_ylabel("Residual (data − fit)")
-        ax_resid.set_title(
-            f"{qubit.name} · {mode_name}: Fit residuals"
-        )
-        rms = float(np.sqrt(np.nanmean(resid ** 2)))
-        ax_resid.text(
-            0.97, 0.97, f"RMS = {rms:.4f}",
-            transform=ax_resid.transAxes, va="top", ha="right", fontsize=9,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
-        )
+        # ── Right: FFT spectrum (computed from raw signal) ────────────────────
+        if np.any(np.isfinite(raw)) and len(tau_ns) > 1:
+            dt_ns = float(tau_ns[1] - tau_ns[0])
+            sig_c = raw - np.nanmean(raw)
+            sig_c = np.where(np.isfinite(sig_c), sig_c, 0.0)
+            fft_mag_plot = np.abs(np.fft.rfft(sig_c))
+            freqs_plot = np.fft.rfftfreq(len(sig_c), d=dt_ns * 1e-9)
+            freqs_khz = freqs_plot[1:] / 1e3
+            ax_fft.plot(freqs_khz, fft_mag_plot[1:], "-", lw=1.2, color="slategrey")
+            if res is not None and res.success:
+                chi_khz = res.chi_eff_hz / 1e3
+                ax_fft.axvline(chi_khz, color="tomato", lw=1.5, ls="--",
+                               label=f"χ_eff/(2π) = {chi_khz:.1f} kHz")
+                ax_fft.legend(fontsize=9)
+                ax_fft.set_xlim(0, min(3.0 * chi_khz, float(freqs_khz[-1])))
+        else:
+            ax_fft.text(0.5, 0.5, "No signal data", transform=ax_fft.transAxes,
+                        ha="center", va="center", color="grey")
+
+        ax_fft.set_xlabel("Frequency (kHz)")
+        ax_fft.set_ylabel("FFT magnitude (a.u.)")
+        ax_fft.set_title(f"{qubit.name} · {mode_name}: FFT spectrum")
 
     fig.tight_layout()
     return fig

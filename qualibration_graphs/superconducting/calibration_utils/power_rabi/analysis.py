@@ -6,7 +6,7 @@ import numpy as np
 import xarray as xr
 from qualibrate import QualibrationNode
 from qualibration_libs.analysis import fit_oscillation
-from qualibration_libs.data import convert_IQ_to_V
+from qualibration_libs.data import convert_IQ_to_V, apply_confusion_correction_to_dataset
 from calibration_utils.error_codes import PowerRabiErrorCode, PowerRabiCorrectiveAction
 
 # Thresholds for period-count classification (in adaptive mode)
@@ -76,6 +76,8 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, node.namespace["qubits"])
+    else:
+        ds = apply_confusion_correction_to_dataset(ds, node)
 
     _is_ef = not hasattr(node.parameters, "operation")
     if _is_ef:
@@ -217,9 +219,18 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
                 offset_q
             )
 
-            # Find the amplitude prefactor at maximum
-            max_idx = np.argmax(fitted_curve_q)
-            factor_q = fit.amp_prefactor.values[max_idx]
+            # Find the amplitude prefactor at the first pi-pulse extremum.
+            # The pi pulse is at the first MAXIMUM when the signal ascends from
+            # zero rotation (I(|f>) > I(|g>)), and at the first MINIMUM when
+            # the signal descends (I(|f>) < I(|g>)).  Detect the case by
+            # checking the sign of the fitted value at the sweep start relative
+            # to the offset: if the curve starts above offset it is descending.
+            starts_high = fitted_curve_q[0] > offset_q
+            if starts_high:
+                extremum_idx = np.argmin(fitted_curve_q)
+            else:
+                extremum_idx = np.argmax(fitted_curve_q)
+            factor_q = fit.amp_prefactor.values[extremum_idx]
             factors.append(factor_q)
 
         factor = xr.DataArray(factors, dims="qubit", coords={"qubit": fit.qubit})

@@ -116,10 +116,21 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     factor = getattr(cavity_mode, "thermalization_time_factor", 5.0)
     therm_clk = int(np.clip(t1_s * factor * 1e9 / 4, 4, 2_500_000_000))
 
+    # amp_min/amp_max are in photon units (alpha). Convert to amplitude_scale using
+    # current alpha_max so the sweep covers the same physical range on re-runs.
+    mode_name = node.parameters.mode_name
+    _pairs = getattr(node.machine, "cavity_transmon_pairs", {})
+    current_alpha_max = 1.0
+    for _pk, _pv in _pairs.items():
+        if _pk.endswith(f"_{mode_name}") and getattr(_pv, "displacement_alpha_max", None) is not None:
+            current_alpha_max = float(_pv.displacement_alpha_max)
+            break
+    node.namespace["current_alpha_max"] = current_alpha_max
+
     # Amplitude sweep (includes negative values for full Wigner slice)
     amp_array = np.linspace(
-        node.parameters.amp_min,
-        node.parameters.amp_max,
+        node.parameters.amp_min / current_alpha_max,
+        node.parameters.amp_max / current_alpha_max,
         node.parameters.amp_points,
     )
     node.namespace["amp_array"] = amp_array
@@ -187,8 +198,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         if node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
+                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
 
+                    align()
                     # --- Reverse displacement (cavity back toward vacuum) ---
                     align()
                     cavity_mode.cavity_mode_drive.play("displacement", amplitude_scale=a_neg)
@@ -282,16 +294,30 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 continue
 
             sigma = res["sigma"]
-            cal_amplitude = base_amp * sigma
+
+            MAX_VOLTAGE = 0.5      # OPX+ DAC ceiling [V]
+            AMP_SCALE_LIMIT = 1.9  # firmware headroom
+
+            alpha_max = MAX_VOLTAGE / (base_amp * sigma * AMP_SCALE_LIMIT)
+            cal_amplitude = base_amp * sigma * alpha_max  # ≈ 0.263 V
+
             cavity_mode.cavity_mode_drive.operations["displacement"].amplitude = float(cal_amplitude)
 
-            # Write sigma (= A₁ph) to CavityTransmonPair for downstream nodes
             pair_key = f"{qubit.name}_{mode_name}"
             pairs = getattr(node.machine, "cavity_transmon_pairs", None)
             if pairs is not None and pair_key in pairs:
-                k_fit = 1.0 / (sigma ** 2)  # n̄ = k·A² → k = 1/sigma²
+                k_fit = 1.0 / (sigma ** 2)
                 if hasattr(pairs[pair_key], "displacement_k"):
                     pairs[pair_key].displacement_k = float(k_fit)
+                if hasattr(pairs[pair_key], "displacement_alpha_max"):
+                    pairs[pair_key].displacement_alpha_max = float(alpha_max)
+
+            node.log(
+                f"Displacement (Wigner) calibration: sigma={sigma:.4f}, alpha_max={alpha_max:.3f}, "
+                f"stored amplitude={cal_amplitude:.6f} V  "
+                f"(amplitude_scale=1 -> {alpha_max:.2f} photons, "
+                f"max safe alpha={alpha_max * AMP_SCALE_LIMIT:.2f})"
+            )
 
             break  # one cavity mode shared across all qubits in this run
 

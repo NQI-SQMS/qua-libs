@@ -23,7 +23,7 @@ import xarray as xr
 from lmfit import Model, Parameter
 
 from qualibrate import QualibrationNode
-from qualibration_libs.data import convert_IQ_to_V
+from qualibration_libs.data import convert_IQ_to_V, apply_confusion_correction_to_dataset
 
 
 @dataclass
@@ -103,6 +103,8 @@ def _fit_cosine(x: np.ndarray, y: np.ndarray) -> Tuple[float, float, float, floa
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, node.namespace["qubits"])
+    else:
+        ds = apply_confusion_correction_to_dataset(ds, node)
     return ds
 
 

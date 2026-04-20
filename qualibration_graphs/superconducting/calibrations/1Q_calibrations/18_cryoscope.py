@@ -221,8 +221,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     if node.parameters.use_state_discrimination:
                         assign(state[0], Cast.to_int(I[0] > qubit.resonator.operations["readout"].threshold))
                         save(state[0], state_st[0])
-                        wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
+                    qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
 
+                align()
         with stream_processing():
             # for the progress counter
             n_st.save("n")

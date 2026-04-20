@@ -204,7 +204,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             if node.parameters.use_state_discrimination:
                                 assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                                wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
+                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
 
                             qubit.resonator.wait(node.machine.depletion_time * u.ns)
                         align()
@@ -324,8 +324,13 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             chi_hz = res["chi_hz"]
             k = res["k"]
 
-            # Store calibrated absolute amplitude: play at scale=1.0 → 1 photon on average
-            cal_amplitude = base_amp * amp_one_scale
+            # 1-photon voltage; then scale up to fill DAC headroom
+            cal_amplitude_1ph = base_amp * amp_one_scale
+            MAX_VOLTAGE = 0.5
+            AMP_SCALE_LIMIT = 1.9
+            alpha_max = MAX_VOLTAGE / (cal_amplitude_1ph * AMP_SCALE_LIMIT)
+            cal_amplitude = cal_amplitude_1ph * alpha_max  # ≈ 0.263 V
+
             cavity_mode.cavity_mode_drive.operations["displacement"].amplitude = float(cal_amplitude)
 
             # Update CavityTransmonPair (create on-the-fly if missing)
@@ -340,12 +345,20 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                     logger.info(f"Created CavityTransmonPair '{pair_key}' on the fly.")
                 pairs[pair_key].chi = float(chi_hz)
                 pairs[pair_key].displacement_k = float(k)
+                if hasattr(pairs[pair_key], "displacement_alpha_max"):
+                    pairs[pair_key].displacement_alpha_max = float(alpha_max)
             else:
                 logger.warning(
                     f"machine has no cavity_transmon_pairs field — "
                     f"chi/k for '{pair_key}' not persisted to QUAM. "
                     "Check that SrfQuam is the active QUAM class."
                 )
+
+            logger.info(
+                f"Displacement (PNRS) calibration: alpha_max={alpha_max:.3f}, "
+                f"stored amplitude={cal_amplitude:.6f} V  "
+                f"(amplitude_scale=1 -> {alpha_max:.2f} photons)"
+            )
 
             break  # one cavity mode shared across all qubits in this run
 

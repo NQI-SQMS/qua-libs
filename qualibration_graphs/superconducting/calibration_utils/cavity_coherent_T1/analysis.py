@@ -32,7 +32,7 @@ import xarray as xr
 from scipy.optimize import curve_fit
 
 from qualibrate import QualibrationNode
-from qualibration_libs.data import convert_IQ_to_V
+from qualibration_libs.data import convert_IQ_to_V, apply_confusion_correction_to_dataset
 
 
 @dataclass
@@ -67,6 +67,8 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, node.namespace["qubits"])
+    else:
+        ds = apply_confusion_correction_to_dataset(ds, node)
     return ds
 
 

@@ -158,7 +158,7 @@ def create_qua_program(node: QualibrationNode[EfParameters, Quam]):
                                 assign(diff[p], Math.abs(I[i] - qubit.resonator.gef_centers[p][0]) + Math.abs(Q[i] - qubit.resonator.gef_centers[p][1]))
                             assign(state[i], Math.argmin(diff))
                             save(state[i], state_st[i])
-                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
+                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
                     align()
 
         with stream_processing():

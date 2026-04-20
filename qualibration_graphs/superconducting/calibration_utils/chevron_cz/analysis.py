@@ -6,7 +6,7 @@ import numpy as np
 import xarray as xr
 from qualibrate import QualibrationNode
 from qualibration_libs.analysis.fitting import fit_oscillation_decay_exp, oscillation_decay_exp
-from qualibration_libs.data import convert_IQ_to_V
+from qualibration_libs.data import convert_IQ_to_V, apply_confusion_correction_to_dataset
 from scipy.optimize import curve_fit
 
 from quam.components.quantum_components import qubit
@@ -158,6 +158,8 @@ def fit_chevron_cz(ds, dim):
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, qubit_pairs=node.namespace["qubit_pairs"], IQ_list=["I_control", "Q_control"])
+    else:
+        ds = apply_confusion_correction_to_dataset(ds, node)
 
     def detuning(qp, amp):
         return -((amp * node.namespace["pulse_amplitudes"][qp.name]) ** 2) * qp.qubit_control.freq_vs_flux_01_quad_term

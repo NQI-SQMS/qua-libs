@@ -171,8 +171,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             if node.parameters.use_state_discrimination:
                                 assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                                wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
+                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
 
+                        align()
             align()  # Final alignment after batch completes
 
         with stream_processing():

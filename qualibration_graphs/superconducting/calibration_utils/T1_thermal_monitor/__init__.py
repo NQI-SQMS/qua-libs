@@ -2,6 +2,8 @@ from .parameters import Parameters
 from .analysis import (
     IterResult,
     fit_T1_dataset,
+    fit_ramsey_dataset,
+    fit_echo_dataset,
     fit_rpm_datasets,
     build_dataset,
     reconstruct_iter_results,
@@ -14,6 +16,8 @@ __all__ = [
     "Parameters",
     "IterResult",
     "fit_T1_dataset",
+    "fit_ramsey_dataset",
+    "fit_echo_dataset",
     "fit_rpm_datasets",
     "build_dataset",
     "reconstruct_iter_results",

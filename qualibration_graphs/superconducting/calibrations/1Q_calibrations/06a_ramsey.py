@@ -73,6 +73,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     num_qubits = len(qubits)
 
     n_avg = node.parameters.num_shots
+    x180_op = node.parameters.x180_operation
 
     idle_times = get_idle_times_in_clock_cycles(node.parameters)
     detuning = node.parameters.frequency_detuning_in_mhz * u.MHz
@@ -84,6 +85,17 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         "idle_time": xr.DataArray(4 * idle_times, attrs={"long_name": "idle times", "units": "ns"}),
         "detuning_signs": xr.DataArray(detuning_signs, attrs={"long_name": "detuning signs"}),
     }
+
+    # Per-qubit IF correction derived from the chosen pulse's detuning field (compile-time)
+    corrections = {}  # qubit_name -> int Hz
+    if node.parameters.correct_with_pulse_detuning:
+        for qubit in qubits:
+            pulse = qubit.xy.operations.get(x180_op)
+            corrections[qubit.name] = int(getattr(pulse, "detuning", 0)) if pulse is not None else 0
+    else:
+        for qubit in qubits:
+            corrections[qubit.name] = 0
+
     with program() as node.namespace["qua_program"]:
         I, I_st, Q, Q_st, n, n_st = node.machine.declare_qua_variables()
         idle_time = declare(int)
@@ -99,6 +111,14 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             for qubit in multiplexed_qubits.values():
                 node.machine.initialize_qpu(target=qubit)
             align()
+
+            # Apply element IF correction once before all averages (compile-time constant)
+            for qubit in multiplexed_qubits.values():
+                if corrections[qubit.name] != 0:
+                    update_frequency(
+                        qubit.xy.name,
+                        int(qubit.xy.intermediate_frequency) + corrections[qubit.name],
+                    )
 
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
@@ -123,11 +143,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                     Cast.mul_fixed_by_int(-detuning * 1e-9, 4 * idle_time),
                                 )
 
-                            # with strict_timing_():
-                            qubit.xy.play("x90")
+                            # x90 derived from x180_op at half amplitude
+                            qubit.xy.play(x180_op, amplitude_scale=0.5)
                             qubit.xy.frame_rotation_2pi(virtual_detuning_phases[i])
                             qubit.xy.wait(idle_time)
-                            qubit.xy.play("x90")
+                            qubit.xy.play(x180_op, amplitude_scale=0.5)
 
                         align()
                         for i, qubit in multiplexed_qubits.items():
@@ -137,8 +157,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             if node.parameters.use_state_discrimination:
                                 assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                                wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
+                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
                         align()
+
+            # Restore element IF to nominal value after all averages
+            for qubit in multiplexed_qubits.values():
+                if corrections[qubit.name] != 0:
+                    update_frequency(qubit.xy.name, int(qubit.xy.intermediate_frequency))
 
         with stream_processing():
             n_st.save("n")
@@ -233,11 +258,21 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def update_state(node: QualibrationNode[Parameters, Quam]):
     """Update the relevant parameters if the qubit data analysis was successful."""
+    x180_op = node.parameters.x180_operation
+    use_selective_update = node.parameters.selective_state_update and x180_op != "x180"
     with node.record_state_updates():
         for q in node.namespace["qubits"]:
-            if node.results["fit_results"][q.name]["success"]:
-                q.f_01 -= float(node.results["fit_results"][q.name]["freq_offset"])
-                q.xy.RF_frequency -= float(node.results["fit_results"][q.name]["freq_offset"])
+            if not node.results["fit_results"][q.name]["success"]:
+                continue
+            freq_offset = float(node.results["fit_results"][q.name]["freq_offset"])
+            if use_selective_update:
+                # Store correction in pulse.detuning; do NOT touch f_01 / T2ramsey
+                pulse = q.xy.operations.get(x180_op)
+                if pulse is not None and hasattr(pulse, "detuning"):
+                    pulse.detuning -= freq_offset
+            else:
+                q.f_01 -= freq_offset
+                q.xy.RF_frequency -= freq_offset
                 q.T2ramsey = float(node.results["fit_results"][q.name]["decay"])
 
 

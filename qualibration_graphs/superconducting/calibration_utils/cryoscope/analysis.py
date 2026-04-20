@@ -6,7 +6,7 @@ import numpy as np
 import xarray as xr
 from qualibrate import QualibrationNode
 from qualibration_libs.analysis import fit_oscillation, unwrap_phase
-from qualibration_libs.data import convert_IQ_to_V
+from qualibration_libs.data import convert_IQ_to_V, apply_confusion_correction_to_dataset
 from scipy.optimize import curve_fit, minimize
 from scipy.signal import deconvolve, savgol_filter
 
@@ -103,6 +103,8 @@ def single_exp(da, plot=True):
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, node.namespace["qubits"])
+    else:
+        ds = apply_confusion_correction_to_dataset(ds, node)
     return ds
 
 

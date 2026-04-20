@@ -5,7 +5,7 @@ import numpy as np
 import xarray as xr
 
 from qualibrate import QualibrationNode
-from qualibration_libs.data import convert_IQ_to_V
+from qualibration_libs.data import convert_IQ_to_V, apply_confusion_correction_to_dataset
 
 
 @dataclass
@@ -52,6 +52,8 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, node.namespace["qubits"])
+    else:
+        ds = apply_confusion_correction_to_dataset(ds, node)
     # ds = add_amplitude_and_phase(ds, "detuning", subtract_slope_flag=True)
     # full_freq = np.array(
     #     [ds.detuning + q.xy.RF_frequency for q in node.namespace["qubits"]]

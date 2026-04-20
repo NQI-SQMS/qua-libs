@@ -102,19 +102,25 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
     displacement_scale = node.parameters.displacement_scale
     displacement_alpha = node.parameters.displacement_alpha
-    # Actual QUA amplitude: scale × alpha (higher alpha → more photons)
-    actual_displacement = displacement_scale * displacement_alpha
     cavity_mode = _get_cavity_mode(node)
     node.namespace["cavity_mode"] = cavity_mode
 
-    # Resolve sideband_drive for active cavity cooling
+    # Resolve sideband_drive and alpha_max from pair
     mode_name = node.parameters.mode_name
     sideband_drive = None
+    alpha_max = 1.0
     pairs = getattr(node.machine, "cavity_transmon_pairs", {})
     for pair_key, pair in pairs.items():
-        if pair_key.endswith(f"_{mode_name}") and getattr(pair, "sideband_drive", None) is not None:
-            sideband_drive = pair.sideband_drive
+        if pair_key.endswith(f"_{mode_name}"):
+            if getattr(pair, "sideband_drive", None) is not None:
+                sideband_drive = pair.sideband_drive
+            if getattr(pair, "displacement_alpha_max", None) is not None:
+                alpha_max = float(pair.displacement_alpha_max)
             break
+
+    # displacement_scale and displacement_alpha are in photon units (alpha);
+    # divide by alpha_max to get the firmware amplitude_scale.
+    actual_displacement = displacement_scale * displacement_alpha / alpha_max
     node.namespace["sideband_drive"] = sideband_drive
 
     node.namespace["sweep_axes"] = {
@@ -183,10 +189,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         if node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
+                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
 
                         qubit.resonator.wait(node.machine.depletion_time * u.ns)
 
+                    align()
                     # Active reset: D(-α) returns cavity exactly to vacuum.
                     if node.parameters.active_reset:
                         align()

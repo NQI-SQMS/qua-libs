@@ -107,12 +107,17 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     # Resolve sideband_drive for active cavity cooling (used only if requested)
     mode_name = node.parameters.mode_name
     sideband_drive = None
+    alpha_max = 1.0
     pairs = getattr(node.machine, "cavity_transmon_pairs", {})
     for pair_key, pair in pairs.items():
-        if pair_key.endswith(f"_{mode_name}") and getattr(pair, "sideband_drive", None) is not None:
-            sideband_drive = pair.sideband_drive
+        if pair_key.endswith(f"_{mode_name}"):
+            if getattr(pair, "sideband_drive", None) is not None:
+                sideband_drive = pair.sideband_drive
+            if getattr(pair, "displacement_alpha_max", None) is not None:
+                alpha_max = float(pair.displacement_alpha_max)
             break
     node.namespace["sideband_drive"] = sideband_drive
+    node.namespace["alpha_max"] = alpha_max
 
     # ---- Time sweep (log or linear, via IdleTimeNodeParameters) --------------
     # get_idle_times_in_clock_cycles returns clock cycles for the per-repeat wait.
@@ -175,7 +180,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     align()
                     cavity_mode.cavity_mode_drive.play(
                         "displacement",
-                        amplitude_scale=node.parameters.displacement_scale,
+                        amplitude_scale=node.parameters.displacement_scale / node.namespace["alpha_max"],
                     )
 
                     # --- Wait for decay (delay_repeats × t) ---
@@ -198,7 +203,8 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         if node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
+                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                    align()
 
         with stream_processing():
             n_st.save("n")

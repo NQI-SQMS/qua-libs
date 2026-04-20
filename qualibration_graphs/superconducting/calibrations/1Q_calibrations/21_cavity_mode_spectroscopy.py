@@ -109,11 +109,8 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     }
 
     with program() as node.namespace["qua_program"]:
-        n = declare(int)
+        I, I_st, Q, Q_st, n, n_st = node.machine.declare_qua_variables()
         f = declare(int)
-        n_st = declare_stream()
-
-        I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
         if node.parameters.use_state_discrimination:
             state = [declare(int) for _ in range(num_qubits)]
             state_st = [declare_stream() for _ in range(num_qubits)]
@@ -138,6 +135,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         # Thermalise cavity and qubit before each point.
                         cavity_mode.cavity_mode_drive.wait(therm_clk)
                         qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
+                        align()
 
                         # Ensure qubit drive is at bare ge frequency
                         qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
@@ -161,27 +159,20 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         # Dispersive detection: probe qubit at bare ge frequency.
                         # If photons are present the qubit is dispersively shifted
                         # and the selective probe pulse fails → dip in excitation.
-                        align(cavity_mode.cavity_mode_drive.name, qubit.xy.name)
+                        # align(cavity_mode.cavity_mode_drive.name, qubit.xy.name)
+                        align()
                         qubit.xy.play(qubit_op)
 
                         # Measure
-                        align(qubit.xy.name, qubit.resonator.name)
+                        # align(qubit.xy.name, qubit.resonator.name)
+                        align()
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
                         if node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
-
-                        # Reverse the cavity displacement (de-excite residual photons).
-                        align(qubit.resonator.name, cavity_mode.cavity_mode_drive.name)
-                        cavity_mode.cavity_mode_drive.play(op, amplitude_scale=-amp_factor)
-
-                        # Resonator depletion + qubit thermalization.
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
-                        qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
-
+                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
                     align()
 
         with stream_processing():

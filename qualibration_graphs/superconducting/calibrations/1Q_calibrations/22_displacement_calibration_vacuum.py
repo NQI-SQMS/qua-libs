@@ -113,10 +113,19 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             break
     node.namespace["sideband_drive"] = sideband_drive
 
-    # Amplitude sweep
+    # amp_min/amp_max are in photon units (alpha). Convert to amplitude_scale using the
+    # current alpha_max so the sweep always covers the same physical range on re-runs.
+    # On first run alpha_max defaults to 1.0 (amplitude_scale == photon number).
+    current_alpha_max = 1.0
+    for _pk, _pv in pairs.items():
+        if _pk.endswith(f"_{mode_name}") and getattr(_pv, "displacement_alpha_max", None) is not None:
+            current_alpha_max = float(_pv.displacement_alpha_max)
+            break
+    node.namespace["current_alpha_max"] = current_alpha_max
+
     amp_array = np.linspace(
-        node.parameters.amp_min,
-        node.parameters.amp_max,
+        node.parameters.amp_min / current_alpha_max,
+        node.parameters.amp_max / current_alpha_max,
         node.parameters.amp_points,
     )
     node.namespace["amp_array"] = amp_array
@@ -187,8 +196,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         if node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                            wait(qubit.resonator.depletion_time // 4, qubit.resonator.name)
+                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
 
+                    align()
                     # --- Active reset: D(-a) returns cavity toward vacuum ---
                     if node.parameters.active_reset:
                         align()
@@ -278,6 +288,9 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
     cavity_mode = node.namespace["cavity_mode"]
     base_amp = float(cavity_mode.cavity_mode_drive.operations["displacement"].amplitude)
 
+    MAX_VOLTAGE = 0.5      # OPX+ DAC ceiling [V]
+    AMP_SCALE_LIMIT = 1.9  # firmware headroom (max safe amplitude_scale < 2.0)
+
     with node.record_state_updates():
         for qubit in node.namespace["qubits"]:
             res = node.results["fit_results"].get(qubit.name)
@@ -285,17 +298,31 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 continue
 
             sigma = res["sigma"]
-            cal_amplitude = base_amp * sigma
+
+            # Auto-compute alpha_max: fill DAC to MAX_VOLTAGE / AMP_SCALE_LIMIT ≈ 0.263 V.
+            # amplitude_scale=1 → alpha_max photons; firmware limit AMP_SCALE_LIMIT gives
+            # max accessible alpha = alpha_max * AMP_SCALE_LIMIT.
+            alpha_max = MAX_VOLTAGE / (base_amp * sigma * AMP_SCALE_LIMIT)
+            cal_amplitude = base_amp * sigma * alpha_max  # = MAX_VOLTAGE / AMP_SCALE_LIMIT
+
             cavity_mode.cavity_mode_drive.operations["displacement"].amplitude = float(cal_amplitude)
 
-            # Write displacement_k to CavityTransmonPair for downstream nodes
             mode_name = node.parameters.mode_name
             pair_key = f"{qubit.name}_{mode_name}"
             pairs = getattr(node.machine, "cavity_transmon_pairs", None)
             if pairs is not None and pair_key in pairs:
-                k_fit = 1.0 / (sigma ** 2)  # n̄ = k·A² → k = 1/sigma²
+                if hasattr(pairs[pair_key], "displacement_alpha_max"):
+                    pairs[pair_key].displacement_alpha_max = float(alpha_max)
+                k_fit = 1.0 / (sigma ** 2)
                 if hasattr(pairs[pair_key], "displacement_k"):
                     pairs[pair_key].displacement_k = float(k_fit)
+
+            node.log(
+                f"Displacement calibration: sigma={sigma:.4f}, alpha_max={alpha_max:.3f}, "
+                f"stored amplitude={cal_amplitude:.6f} V  "
+                f"(amplitude_scale=1 -> {alpha_max:.2f} photons, "
+                f"max safe alpha={alpha_max * AMP_SCALE_LIMIT:.2f})"
+            )
 
             break  # one cavity mode shared across all qubits in this run
 

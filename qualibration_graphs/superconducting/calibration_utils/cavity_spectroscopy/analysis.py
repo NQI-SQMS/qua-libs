@@ -19,7 +19,7 @@ import numpy as np
 import xarray as xr
 
 from qualibrate import QualibrationNode
-from qualibration_libs.data import add_amplitude_and_phase, convert_IQ_to_V
+from qualibration_libs.data import add_amplitude_and_phase, convert_IQ_to_V, apply_confusion_correction_to_dataset
 from qualibration_libs.analysis import peaks_dips
 
 
@@ -50,6 +50,8 @@ def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, node.namespace["qubits"])
         ds = add_amplitude_and_phase(ds, "detuning", subtract_slope_flag=True)
+    else:
+        ds = apply_confusion_correction_to_dataset(ds, node)
     # Add the full RF frequency as a coordinate
     cavity_mode = _get_cavity_mode(node)
     full_freq = ds.detuning + cavity_mode.cavity_mode_drive.RF_frequency

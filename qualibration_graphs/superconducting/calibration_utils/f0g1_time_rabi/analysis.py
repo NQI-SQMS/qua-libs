@@ -15,7 +15,7 @@ import xarray as xr
 from lmfit import Model, Parameter
 
 from qualibrate import QualibrationNode
-from qualibration_libs.data import convert_IQ_to_V
+from qualibration_libs.data import convert_IQ_to_V, apply_confusion_correction_to_dataset
 from qualibration_libs.analysis import oscillation
 
 
@@ -48,6 +48,8 @@ def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
     """Convert I/Q to Volts (if needed) and add a duration_ns coordinate."""
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, node.namespace["qubits"])
+    else:
+        ds = apply_confusion_correction_to_dataset(ds, node)
     duration_ns = 4 * ds.duration_cc
     ds = ds.assign_coords(duration_ns=(["duration_cc"], duration_ns.values))
     ds.duration_ns.attrs = {"long_name": "pulse duration", "units": "ns"}
