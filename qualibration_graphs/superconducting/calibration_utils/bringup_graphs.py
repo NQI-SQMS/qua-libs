@@ -131,7 +131,7 @@ def should_restart_qubit_calibration(node, target: str) -> bool:
 
     On success, the post-bringup x180 amplitude, qubit f_01, and RF_frequency are
     saved to temp_calibration so that the x180 fine calibration can restore them if
-    its first Ramsey or power_rabi iteration fails.
+    its first Ramsey or time_rabi iteration fails.
     """
     if node.outcomes.get(target) == "failed":
         logger.info(
@@ -140,11 +140,11 @@ def should_restart_qubit_calibration(node, target: str) -> bool:
         return True
     # Succeeded: snapshot the bringup result so fine calibration can roll back to it.
     # IMPORTANT: _get_machine() returns the first non-None machine found in
-    # _elements (insertion order: spec_vs_power → qubit_spec → power_rabi).
-    # spec_vs_power's machine was loaded before power_rabi ran, so its x180
+    # _elements (insertion order: spec_vs_power → qubit_spec → time_rabi).
+    # spec_vs_power's machine was loaded before time_rabi ran, so its x180
     # amplitude is stale (pre-calibration).  We must read the amplitude from
-    # the power_rabi node's machine, which was updated by update_state.
-    _pr_elem = getattr(node, "_elements", {}).get("power_rabi")
+    # the time_rabi node's machine, which was updated by update_state.
+    _pr_elem = getattr(node, "_elements", {}).get("time_rabi")
     machine = (
         _get_machine(_pr_elem)
         if _pr_elem is not None
@@ -225,6 +225,8 @@ def build_resonator_bringup(
                 num_shots=p.broad_num_shots,
                 peak_prominence=p.broad_peak_prominence,
                 peak_width=p.broad_peak_width,
+                peak_height=p.broad_peak_height,
+                peak_threshold=p.broad_peak_threshold,
                 blacklist_exclusion_radius_mhz=p.blacklist_exclusion_radius_mhz,
                 readout_power_dbm=p.broad_readout_power_dbm,
                 max_amp=p.broad_max_amp,
@@ -239,6 +241,7 @@ def build_resonator_bringup(
                 num_shots=p.high_power_num_shots,
                 readout_power_dbm=p.high_power_readout_power_dbm,
                 max_amp=p.high_power_max_amp,
+                save_readout_amplitude=p.high_power_save_readout_amplitude,
             )
             resonator_discovery.add_node(high_power_res_spec)
             resonator_discovery.connect(broad_res_spec, high_power_res_spec)
@@ -280,6 +283,7 @@ def build_resonator_bringup(
             num_shots=p.low_power_num_shots,
             readout_power_dbm=p.low_power_readout_power_dbm,
             max_amp=p.low_power_max_amp,
+            save_readout_amplitude=p.low_power_save_readout_amplitude,
         )
         resonator_bringup.add_node(low_power_res_spec)
 
@@ -298,7 +302,7 @@ def build_qubit_calibration(
 
         qubit_spectroscopy_vs_power  [inner loop: repeat_spec_vs_power]
         → qubit_spectroscopy
-        → power_rabi                 [inner loop: repeat_rabi_amplitude]
+        → time_rabi
 
     The caller is responsible for adding the returned subgraph to the outer
     graph and registering the outer loop with ``should_restart_qubit_calibration``.
@@ -314,8 +318,9 @@ def build_qubit_calibration(
         qubit_spec_frequency_span_mhz, qubit_spec_frequency_step_mhz,
         qubit_spec_operation_len_ns, qubit_spec_operation_amplitude_factor,
         qubit_spec_num_shots
-        rabi_min_amp_factor, rabi_max_amp_factor, rabi_amp_factor_step, rabi_num_shots
-        max_spec_vs_power_iterations, max_rabi_amp_iterations
+        time_rabi_min_duration_ns, time_rabi_max_duration_ns, time_rabi_duration_step_ns,
+        time_rabi_num_shots, time_rabi_operation_amplitude_factor, time_rabi_drive_power_dbm
+        max_spec_vs_power_iterations
     """
     p = graph.parameters
     with QualibrationGraph.build(
@@ -338,7 +343,11 @@ def build_qubit_calibration(
             operation_len_in_ns=p.spec_vs_power_operation_len_ns,
             linewidth_threshold_hz=p.spec_vs_power_linewidth_threshold_hz,
             max_amplitude_opx=p.spec_vs_power_max_amplitude_opx,
+            min_amplitude_opx=p.spec_vs_power_min_amplitude_opx,
             power_buffer_db=p.spec_vs_power_power_buffer_db,
+            signal_source=p.spec_vs_power_signal_source,
+            peak_persistence_lookahead=p.spec_vs_power_peak_persistence_lookahead,
+            peak_persistence_freq_tolerance_hz=p.spec_vs_power_peak_persistence_freq_tolerance_hz,
         )
         qubit_calibration.add_node(spec_vs_power)
         qubit_calibration.loop(
@@ -353,31 +362,38 @@ def build_qubit_calibration(
             multiplexed=p.multiplexed,
             frequency_span_in_mhz=p.qubit_spec_frequency_span_mhz,
             frequency_step_in_mhz=p.qubit_spec_frequency_step_mhz,
+            operation=p.qubit_spec_operation,
             operation_len_in_ns=p.qubit_spec_operation_len_ns,
             operation_amplitude_factor=p.qubit_spec_operation_amplitude_factor,
             num_shots=p.qubit_spec_num_shots,
+            signal_source=p.qubit_spec_signal_source,
+            find_dip=p.qubit_spec_find_dip,
+            target_peak_width=p.qubit_spec_target_peak_width,
+            update_pulses_amplitude=p.qubit_spec_update_pulses_amplitude,
+            # Never overwrite the iw_angle set by spec_vs_power — it is already correct.
+            update_iw_angle=False,
         )
         qubit_calibration.add_node(qubit_spec)
 
-        # 3. Power Rabi: calibrate pi-pulse amplitude (adaptive rescaling enabled)
-        power_rabi = library.nodes["04b_power_rabi"].copy(
-            name="power_rabi",
-            use_adaptive=True,
+        # 3. Time Rabi: calibrate pi-pulse duration at the power set by spec_vs_power
+        time_rabi = library.nodes["04c_time_rabi"].copy(
+            name="time_rabi",
             multiplexed=p.multiplexed,
-            min_amp_factor=p.rabi_min_amp_factor,
-            max_amp_factor=p.rabi_max_amp_factor,
-            amp_factor_step=p.rabi_amp_factor_step,
-            num_shots=p.rabi_num_shots,
+            min_duration_ns=p.time_rabi_min_duration_ns,
+            max_duration_ns=p.time_rabi_max_duration_ns,
+            duration_step_ns=p.time_rabi_duration_step_ns,
+            num_shots=p.time_rabi_num_shots,
+            operation=p.time_rabi_operation,
+            operation_amplitude_factor=p.time_rabi_operation_amplitude_factor,
+            drive_power_dbm=p.time_rabi_drive_power_dbm,
+            max_amplitude_opx=p.time_rabi_max_amplitude_opx,
         )
-        qubit_calibration.add_node(power_rabi)
-        qubit_calibration.loop(
-            power_rabi,
-            on=should_repeat_rabi_amplitude,
-            max_iterations=p.max_rabi_amp_iterations,
-        )
+        qubit_calibration.add_node(time_rabi)
+        # No inner retry loop: if time_rabi fails, the outer should_restart_qubit_calibration
+        # restarts the full frequency search with the current frequency blacklisted.
 
         qubit_calibration.connect(spec_vs_power, qubit_spec)
-        qubit_calibration.connect(qubit_spec, power_rabi)
+        qubit_calibration.connect(qubit_spec, time_rabi)
 
     return qubit_calibration
 
@@ -610,9 +626,11 @@ def build_x180_fine_calibration(
                 multiplexed=p.multiplexed,
                 num_shots=p.x180_ramsey_num_shots,
                 frequency_detuning_in_mhz=p.x180_ramsey_frequency_detuning_in_mhz,
+                min_wait_time_in_ns=p.x180_ramsey_min_wait_time_in_ns,
                 max_wait_time_in_ns=p.x180_ramsey_max_wait_time_in_ns,
                 wait_time_num_points=p.x180_ramsey_wait_time_num_points,
                 log_or_linear_sweep=p.x180_ramsey_log_or_linear_sweep,
+                x180_operation=p.x180_ramsey_x180_operation,
             )
             ramsey_rabi.add_node(ramsey)
 
@@ -623,7 +641,10 @@ def build_x180_fine_calibration(
                 max_amp_factor=p.x180_rabi_max_amp_factor,
                 amp_factor_step=p.x180_rabi_amp_factor_step,
                 num_shots=p.x180_rabi_num_shots,
+                operation=p.x180_rabi_operation,
+                operation_length_in_ns=p.x180_rabi_operation_length_in_ns,
                 max_number_pulses_per_sweep=p.x180_rabi_max_number_pulses_per_sweep,
+                update_x90=p.x180_rabi_update_x90,
             )
             ramsey_rabi.add_node(power_rabi)
             ramsey_rabi.connect(ramsey, power_rabi)
@@ -636,3 +657,479 @@ def build_x180_fine_calibration(
         )
 
     return x180_fine_calibration
+
+
+# ── EF-transition condition function ──────────────────────────────────────────
+
+def should_repeat_ef_spec(node: QualibrationNode, target: str) -> bool:
+    """Retry EF spectroscopy when no transition peak was found.
+
+    The node's own update_state() handles adaptive span adjustments before
+    the next iteration.  No temp_calibration state is needed for EF (the
+    EF frequency is derived from the known anharmonicity, not a blind search).
+    """
+    if node.outcomes.get(target) == "failed":
+        logger.info(f"{target}: EF spectroscopy failed; retrying.")
+        return True
+    logger.info(f"{target}: EF spectroscopy succeeded.")
+    return False
+
+
+# ── Inner subgraph parameter stubs (EF and cavity) ────────────────────────────
+
+class _EFCalibrationSubgraphParameters(GraphParameters):
+    qubits: List[str] = ["q0"]
+
+
+class _CavityCalibrationSubgraphParameters(GraphParameters):
+    qubits: List[str] = ["q0"]
+
+
+# ── EF bringup subgraph builder ────────────────────────────────────────────────
+
+def build_ef_bringup(
+    graph: QualibrationGraph, library: QualibrationLibrary
+) -> QualibrationGraph:
+    """Build and return the ``ef_bringup`` subgraph.
+
+    Sequence::
+
+        ef_spectroscopy  [loop: should_repeat_ef_spec, max_ef_spec_iterations]
+        → ef_power_rabi
+
+    No spec-vs-power step: the EF frequency is known from anharmonicity.
+    No time-Rabi: power-Rabi is sufficient for EF amplitude calibration.
+
+    The caller is responsible for adding the returned subgraph to the outer
+    graph and connecting it.
+
+    Reads the following attributes from ``graph.parameters``::
+
+        ef_spec_frequency_span_mhz, ef_spec_frequency_step_mhz,
+        ef_spec_amplitude_factor, ef_spec_num_shots,
+        max_ef_spec_iterations,
+        ef_rabi_min_amp_factor, ef_rabi_max_amp_factor,
+        ef_rabi_amp_factor_step, ef_rabi_num_shots
+    """
+    p = graph.parameters
+    with QualibrationGraph.build(
+        "ef_bringup",
+        parameters=_EFCalibrationSubgraphParameters(),
+    ) as ef_bringup:
+
+        ef_spec = library.nodes["12_qubit_spectroscopy_EF"].copy(
+            name="ef_spectroscopy",
+            frequency_span_in_mhz=p.ef_spec_frequency_span_mhz,
+            frequency_step_in_mhz=p.ef_spec_frequency_step_mhz,
+            operation=p.ef_spec_operation,
+            operation_len_in_ns=p.ef_spec_operation_len_in_ns,
+            operation_amplitude_factor=p.ef_spec_amplitude_factor,
+            num_shots=p.ef_spec_num_shots,
+            target_peak_width=p.ef_spec_target_peak_width,
+            update_pulses_amplitude=p.ef_spec_update_pulses_amplitude,
+            find_dip=p.ef_spec_find_dip,
+            update_integration_weights_angle=False,
+        )
+        ef_bringup.add_node(ef_spec)
+        ef_bringup.loop(
+            ef_spec,
+            on=should_repeat_ef_spec,
+            max_iterations=p.max_ef_spec_iterations,
+        )
+
+        ef_rabi = library.nodes["13_power_rabi_ef"].copy(
+            name="ef_power_rabi",
+            min_amp_factor=p.ef_rabi_min_amp_factor,
+            max_amp_factor=p.ef_rabi_max_amp_factor,
+            amp_factor_step=p.ef_rabi_amp_factor_step,
+            num_shots=p.ef_rabi_num_shots,
+        )
+        ef_bringup.add_node(ef_rabi)
+        ef_bringup.connect(ef_spec, ef_rabi)
+
+    return ef_bringup
+
+
+# ── Cavity mode bringup subgraph builder ───────────────────────────────────────
+
+def build_cavity_bringup(
+    graph: QualibrationGraph, library: QualibrationLibrary
+) -> QualibrationGraph:
+    """Build and return the ``cavity_bringup`` subgraph.
+
+    Sequence (all sequential, no retry loops)::
+
+        cavity_mode_spectroscopy
+        → displacement_calibration
+        → cavity_T1
+        → parity_time_measurement
+
+    The cavity mode is selected via ``graph.parameters.cavity_mode_name``.
+    Should be appended after the EF bringup (or readout_power_opt if EF is
+    skipped).
+
+    The caller is responsible for adding the returned subgraph to the outer
+    graph and connecting it.
+
+    Reads the following attributes from ``graph.parameters``::
+
+        cavity_mode_name,
+        cavity_spec_frequency_span_mhz, cavity_spec_frequency_step_mhz,
+        cavity_spec_amplitude_factor, cavity_spec_num_shots,
+        cavity_disp_amp_min, cavity_disp_amp_max, cavity_disp_amp_points,
+        cavity_disp_num_shots,
+        cavity_t1_min_wait_ns, cavity_t1_max_wait_ns, cavity_t1_num_points,
+        cavity_t1_num_shots,
+        parity_min_delay_ns, parity_max_delay_ns, parity_delay_step_ns,
+        parity_num_shots
+    """
+    p = graph.parameters
+    mode = p.cavity_mode_name
+
+    with QualibrationGraph.build(
+        "cavity_bringup",
+        parameters=_CavityCalibrationSubgraphParameters(),
+    ) as cavity_bringup:
+
+        cav_spec = library.nodes["21_cavity_mode_spectroscopy"].copy(
+            name="cavity_mode_spectroscopy",
+            mode_name=mode,
+            frequency_span_in_mhz=p.cavity_spec_frequency_span_mhz,
+            frequency_step_in_mhz=p.cavity_spec_frequency_step_mhz,
+            operation=p.cavity_spec_operation,
+            operation_len_in_ns=p.cavity_spec_operation_len_in_ns,
+            operation_amplitude_factor=p.cavity_spec_amplitude_factor,
+            num_shots=p.cavity_spec_num_shots,
+            qubit_probe_operation=p.cavity_spec_qubit_probe_operation,
+            use_state_discrimination=p.cavity_spec_use_state_discrimination,
+            min_dip_fraction=p.cavity_spec_min_dip_fraction,
+        )
+        cavity_bringup.add_node(cav_spec)
+
+        displ = library.nodes["22_displacement_calibration_vacuum"].copy(
+            name="displacement_calibration",
+            mode_name=mode,
+            amp_min=p.cavity_disp_amp_min,
+            amp_max=p.cavity_disp_amp_max,
+            amp_points=p.cavity_disp_amp_points,
+            num_shots=p.cavity_disp_num_shots,
+            qubit_pulse=p.cavity_disp_qubit_pulse,
+            cavity_reset_type=p.cavity_disp_cavity_reset_type,
+            active_reset=p.cavity_disp_active_reset,
+            use_state_discrimination=p.cavity_disp_use_state_discrimination,
+        )
+        cavity_bringup.add_node(displ)
+
+        cav_t1 = library.nodes["23_cavity_coherent_T1"].copy(
+            name="cavity_T1",
+            mode_name=mode,
+            min_wait_time_in_ns=p.cavity_t1_min_wait_ns,
+            max_wait_time_in_ns=p.cavity_t1_max_wait_ns,
+            wait_time_num_points=p.cavity_t1_num_points,
+            num_shots=p.cavity_t1_num_shots,
+            log_or_linear_sweep=p.cavity_t1_log_or_linear_sweep,
+            displacement_scale=p.cavity_t1_displacement_scale,
+            use_state_discrimination=p.cavity_t1_use_state_discrimination,
+            cavity_reset_type=p.cavity_t1_cavity_reset_type,
+        )
+        cavity_bringup.add_node(cav_t1)
+
+        parity = library.nodes["30_parity_time_measurement"].copy(
+            name="parity_time_measurement",
+            mode_name=mode,
+            min_delay_ns=p.parity_min_delay_ns,
+            max_delay_ns=p.parity_max_delay_ns,
+            delay_step_ns=p.parity_delay_step_ns,
+            num_shots=p.parity_num_shots,
+            displacement_scale=p.parity_displacement_scale,
+            use_state_discrimination=p.parity_use_state_discrimination,
+            cavity_reset_type=p.parity_cavity_reset_type,
+        )
+        cavity_bringup.add_node(parity)
+
+        cavity_bringup.connect(cav_spec, displ)
+        cavity_bringup.connect(displ, cav_t1)
+        cavity_bringup.connect(cav_t1, parity)
+
+    return cavity_bringup
+
+
+# ── Notebook helper: translate graph-level params into per-node overrides ─────
+
+def build_g92_node_overrides(p) -> dict:
+    """
+    Build the nested ``nodes=`` dict required for
+    ``transmon_bringup_adaptive.run(qubits=..., nodes=<this>)``.
+
+    QUAlibrate bakes node parameters at graph-scan time via ``.copy(param=value)``.
+    Those baked values become the *defaults* in ``full_parameters_class`` and are
+    not updated when the user modifies ``g.parameters.*`` at runtime.  The only
+    way to override them is via the ``nodes=`` argument to ``graph.run()``.
+
+    Usage::
+
+        from qualibrate import QualibrationLibrary
+        from calibration_utils.bringup_graphs import build_g92_node_overrides
+
+        library = QualibrationLibrary.get_active_library()
+        g92 = library.graphs["transmon_bringup_adaptive"]
+        p = g92.parameters
+
+        p.broad_frequency_span_mhz = 300.0   # any changes here ...
+        # ...
+        g92.run(qubits=p.qubits, nodes=build_g92_node_overrides(p))  # ... land here
+
+    The function accepts any object with the ``TransmonBringUpParameters`` attribute
+    names (duck-typed) to avoid a circular import.
+    """
+    overrides: dict = {
+        # ── 1. Mixer calibration ──────────────────────────────────────────────
+        "mixer_calibration": {
+            "calibrate_resonator": p.mixer_calibrate_resonator,
+            "calibrate_drive": p.mixer_calibrate_drive,
+            "calibrate_cavity_drive": p.mixer_calibrate_cavity_drive,
+            "calibrate_sideband_drive": p.mixer_calibrate_sideband_drive,
+        },
+        # ── 2. Resonator bringup (nested subgraph) ────────────────────────────
+        "resonator_bringup": {
+            "parameters": {"multiplexed": p.multiplexed},
+            "nodes": {
+                "resonator_discovery": {
+                    "parameters": {"multiplexed": p.multiplexed},
+                    "nodes": {
+                        "broad_resonator_spectroscopy": {
+                            "multiplexed": p.multiplexed,
+                            "frequency_span_in_mhz": p.broad_frequency_span_mhz,
+                            "frequency_step_in_mhz": p.broad_frequency_step_mhz,
+                            "num_shots": p.broad_num_shots,
+                            "peak_prominence": p.broad_peak_prominence,
+                            "peak_width": p.broad_peak_width,
+                            "peak_height": p.broad_peak_height,
+                            "peak_threshold": p.broad_peak_threshold,
+                            "blacklist_exclusion_radius_mhz": p.blacklist_exclusion_radius_mhz,
+                            "readout_power_dbm": p.broad_readout_power_dbm,
+                            "max_amp": p.broad_max_amp,
+                        },
+                        "resonator_spectroscopy_high_power": {
+                            "multiplexed": p.multiplexed,
+                            "frequency_span_in_mhz": p.high_power_frequency_span_mhz,
+                            "frequency_step_in_mhz": p.high_power_frequency_step_mhz,
+                            "num_shots": p.high_power_num_shots,
+                            "readout_power_dbm": p.high_power_readout_power_dbm,
+                            "max_amp": p.high_power_max_amp,
+                            "save_readout_amplitude": p.high_power_save_readout_amplitude,
+                        },
+                    },
+                },
+                "resonator_punch_out": {
+                    "multiplexed": p.multiplexed,
+                    "frequency_span_in_mhz": p.punch_out_frequency_span_mhz,
+                    "frequency_step_in_mhz": p.punch_out_frequency_step_mhz,
+                    "min_power_dbm": p.punch_out_min_power_dbm,
+                    "max_power_dbm": p.punch_out_max_power_dbm,
+                    "num_power_points": p.punch_out_num_power_points,
+                    "max_amp": p.punch_out_max_amp,
+                    "num_shots": p.punch_out_num_shots,
+                    "frequency_shift_threshold_in_hz": p.punch_out_frequency_shift_threshold_hz,
+                    "use_adaptive_span": p.use_adaptive_span,
+                },
+                "resonator_spectroscopy_low_power": {
+                    "multiplexed": p.multiplexed,
+                    "frequency_span_in_mhz": p.low_power_frequency_span_mhz,
+                    "frequency_step_in_mhz": p.low_power_frequency_step_mhz,
+                    "num_shots": p.low_power_num_shots,
+                    "readout_power_dbm": p.low_power_readout_power_dbm,
+                    "max_amp": p.low_power_max_amp,
+                    "save_readout_amplitude": p.low_power_save_readout_amplitude,
+                },
+            },
+        },
+        # ── 3. Qubit calibration (nested subgraph) ────────────────────────────
+        "qubit_calibration": {
+            "nodes": {
+                "qubit_spectroscopy_vs_power": {
+                    "use_adaptive_span": True,
+                    "multiplexed": p.multiplexed,
+                    "frequency_span_in_mhz": p.spec_vs_power_frequency_span_mhz,
+                    "frequency_step_in_mhz": p.spec_vs_power_frequency_step_mhz,
+                    "num_power_points": p.spec_vs_power_num_power_points,
+                    "num_shots": p.spec_vs_power_num_shots,
+                    "min_power_dbm": p.spec_vs_power_min_power_dbm,
+                    "max_power_dbm": p.spec_vs_power_max_power_dbm,
+                    "operation": p.spec_vs_power_operation,
+                    "operation_len_in_ns": p.spec_vs_power_operation_len_ns,
+                    "linewidth_threshold_hz": p.spec_vs_power_linewidth_threshold_hz,
+                    "max_amplitude_opx": p.spec_vs_power_max_amplitude_opx,
+                    "min_amplitude_opx": p.spec_vs_power_min_amplitude_opx,
+                    "power_buffer_db": p.spec_vs_power_power_buffer_db,
+                    "signal_source": p.spec_vs_power_signal_source,
+                    "peak_persistence_lookahead": p.spec_vs_power_peak_persistence_lookahead,
+                    "peak_persistence_freq_tolerance_hz": p.spec_vs_power_peak_persistence_freq_tolerance_hz,
+                },
+                "qubit_spectroscopy": {
+                    "multiplexed": p.multiplexed,
+                    "frequency_span_in_mhz": p.qubit_spec_frequency_span_mhz,
+                    "frequency_step_in_mhz": p.qubit_spec_frequency_step_mhz,
+                    "operation": p.qubit_spec_operation,
+                    "operation_len_in_ns": p.qubit_spec_operation_len_ns,
+                    "operation_amplitude_factor": p.qubit_spec_operation_amplitude_factor,
+                    "num_shots": p.qubit_spec_num_shots,
+                    "signal_source": p.qubit_spec_signal_source,
+                    "find_dip": p.qubit_spec_find_dip,
+                    "target_peak_width": p.qubit_spec_target_peak_width,
+                    "update_pulses_amplitude": p.qubit_spec_update_pulses_amplitude,
+                    "update_iw_angle": False,
+                },
+                "time_rabi": {
+                    "multiplexed": p.multiplexed,
+                    "min_duration_ns": p.time_rabi_min_duration_ns,
+                    "max_duration_ns": p.time_rabi_max_duration_ns,
+                    "duration_step_ns": p.time_rabi_duration_step_ns,
+                    "num_shots": p.time_rabi_num_shots,
+                    "operation": p.time_rabi_operation,
+                    "operation_amplitude_factor": p.time_rabi_operation_amplitude_factor,
+                    "drive_power_dbm": p.time_rabi_drive_power_dbm,
+                    "max_amplitude_opx": p.time_rabi_max_amplitude_opx,
+                },
+            },
+        },
+        # ── 4. X180 fine calibration (doubly-nested subgraph) ─────────────────
+        "x180_fine_calibration": {
+            "nodes": {
+                "ramsey_rabi": {
+                    "nodes": {
+                        "ramsey": {
+                            "multiplexed": p.multiplexed,
+                            "num_shots": p.x180_ramsey_num_shots,
+                            "frequency_detuning_in_mhz": p.x180_ramsey_frequency_detuning_in_mhz,
+                            "min_wait_time_in_ns": p.x180_ramsey_min_wait_time_in_ns,
+                            "max_wait_time_in_ns": p.x180_ramsey_max_wait_time_in_ns,
+                            "wait_time_num_points": p.x180_ramsey_wait_time_num_points,
+                            "log_or_linear_sweep": p.x180_ramsey_log_or_linear_sweep,
+                            "x180_operation": p.x180_ramsey_x180_operation,
+                        },
+                        "power_rabi": {
+                            "multiplexed": p.multiplexed,
+                            "min_amp_factor": p.x180_rabi_min_amp_factor,
+                            "max_amp_factor": p.x180_rabi_max_amp_factor,
+                            "amp_factor_step": p.x180_rabi_amp_factor_step,
+                            "num_shots": p.x180_rabi_num_shots,
+                            "operation": p.x180_rabi_operation,
+                            "operation_length_in_ns": p.x180_rabi_operation_length_in_ns,
+                            "max_number_pulses_per_sweep": p.x180_rabi_max_number_pulses_per_sweep,
+                            "update_x90": p.x180_rabi_update_x90,
+                        },
+                    },
+                },
+            },
+        },
+        # ── 5. T1 ─────────────────────────────────────────────────────────────
+        "T1": {
+            "num_shots": p.t1_num_shots,
+            "min_wait_time_in_ns": p.t1_min_wait_time_ns,
+            "max_wait_time_in_ns": p.t1_max_wait_time_ns,
+            "wait_time_num_points": p.t1_wait_time_num_points,
+            "log_or_linear_sweep": p.t1_log_or_linear_sweep,
+        },
+        # ── 6. Readout frequency optimization ─────────────────────────────────
+        "readout_frequency_optimization": {
+            "multiplexed": p.multiplexed,
+            "num_shots": p.readout_freq_num_shots,
+            "frequency_span_in_mhz": p.readout_freq_frequency_span_mhz,
+            "frequency_step_in_mhz": p.readout_freq_frequency_step_mhz,
+        },
+        # ── 7. Readout length optimization ────────────────────────────────────
+        "readout_length_optimization": {
+            "max_readout_length_in_ns": p.readout_length_max_ns,
+            "division_length_in_ns": p.readout_length_division_ns,
+            "num_shots": p.readout_length_num_shots,
+            "readout_operation": p.readout_length_readout_operation,
+            "cos_weight_name": p.readout_length_cos_weight_name,
+            "sin_weight_name": p.readout_length_sin_weight_name,
+            "minus_sin_weight_name": p.readout_length_minus_sin_weight_name,
+        },
+        # ── 8. Readout power optimization ─────────────────────────────────────
+        "readout_power_optimization": {
+            "num_shots": p.readout_power_num_shots,
+            "start_amp": p.readout_power_start_amp,
+            "end_amp": p.readout_power_end_amp,
+            "num_amps": p.readout_power_num_amps,
+            "outliers_threshold": p.readout_power_outliers_threshold,
+            "plot_raw": p.readout_power_plot_raw,
+        },
+    }
+    # ── 9. EF bringup (present only when run_ef_calibration=True at scan time) ─
+    if getattr(p, "run_ef_calibration", True):
+        overrides["ef_bringup"] = {
+            "nodes": {
+                "ef_spectroscopy": {
+                    "frequency_span_in_mhz": p.ef_spec_frequency_span_mhz,
+                    "frequency_step_in_mhz": p.ef_spec_frequency_step_mhz,
+                    "operation": p.ef_spec_operation,
+                    "operation_len_in_ns": p.ef_spec_operation_len_in_ns,
+                    "operation_amplitude_factor": p.ef_spec_amplitude_factor,
+                    "num_shots": p.ef_spec_num_shots,
+                    "target_peak_width": p.ef_spec_target_peak_width,
+                    "update_pulses_amplitude": p.ef_spec_update_pulses_amplitude,
+                    "find_dip": p.ef_spec_find_dip,
+                    "update_integration_weights_angle": False,
+                },
+                "ef_power_rabi": {
+                    "min_amp_factor": p.ef_rabi_min_amp_factor,
+                    "max_amp_factor": p.ef_rabi_max_amp_factor,
+                    "amp_factor_step": p.ef_rabi_amp_factor_step,
+                    "num_shots": p.ef_rabi_num_shots,
+                },
+            },
+        }
+    # ── 10. Cavity bringup (present only when run_cavity_calibration=True) ─────
+    if getattr(p, "run_cavity_calibration", False):
+        overrides["cavity_bringup"] = {
+            "nodes": {
+                "cavity_mode_spectroscopy": {
+                    "mode_name": p.cavity_mode_name,
+                    "frequency_span_in_mhz": p.cavity_spec_frequency_span_mhz,
+                    "frequency_step_in_mhz": p.cavity_spec_frequency_step_mhz,
+                    "operation": p.cavity_spec_operation,
+                    "operation_len_in_ns": p.cavity_spec_operation_len_in_ns,
+                    "operation_amplitude_factor": p.cavity_spec_amplitude_factor,
+                    "num_shots": p.cavity_spec_num_shots,
+                    "qubit_probe_operation": p.cavity_spec_qubit_probe_operation,
+                    "use_state_discrimination": p.cavity_spec_use_state_discrimination,
+                    "min_dip_fraction": p.cavity_spec_min_dip_fraction,
+                },
+                "displacement_calibration": {
+                    "mode_name": p.cavity_mode_name,
+                    "amp_min": p.cavity_disp_amp_min,
+                    "amp_max": p.cavity_disp_amp_max,
+                    "amp_points": p.cavity_disp_amp_points,
+                    "num_shots": p.cavity_disp_num_shots,
+                    "qubit_pulse": p.cavity_disp_qubit_pulse,
+                    "cavity_reset_type": p.cavity_disp_cavity_reset_type,
+                    "active_reset": p.cavity_disp_active_reset,
+                    "use_state_discrimination": p.cavity_disp_use_state_discrimination,
+                },
+                "cavity_T1": {
+                    "mode_name": p.cavity_mode_name,
+                    "min_wait_time_in_ns": p.cavity_t1_min_wait_ns,
+                    "max_wait_time_in_ns": p.cavity_t1_max_wait_ns,
+                    "wait_time_num_points": p.cavity_t1_num_points,
+                    "num_shots": p.cavity_t1_num_shots,
+                    "log_or_linear_sweep": p.cavity_t1_log_or_linear_sweep,
+                    "displacement_scale": p.cavity_t1_displacement_scale,
+                    "use_state_discrimination": p.cavity_t1_use_state_discrimination,
+                    "cavity_reset_type": p.cavity_t1_cavity_reset_type,
+                },
+                "parity_time_measurement": {
+                    "mode_name": p.cavity_mode_name,
+                    "min_delay_ns": p.parity_min_delay_ns,
+                    "max_delay_ns": p.parity_max_delay_ns,
+                    "delay_step_ns": p.parity_delay_step_ns,
+                    "num_shots": p.parity_num_shots,
+                    "displacement_scale": p.parity_displacement_scale,
+                    "use_state_discrimination": p.parity_use_state_discrimination,
+                    "cavity_reset_type": p.parity_cavity_reset_type,
+                },
+            },
+        }
+    return overrides

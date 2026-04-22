@@ -70,13 +70,16 @@ def plot_individual_raw_data_with_fit(
     if fit is None:
         return
 
-    # --- NEW: plot the two resonance points only ---
+    # --- plot the two resonance points only ---
     powers = ds.power.values
-    P_low, P_high = powers[0], powers[1]
+    if len(powers) < 2:
+        return
+    P_low = float(powers[0])
+    P_high = float(powers[-1])
 
-    # resonance positions at the two powers
+    # Use isel (position-based) to avoid duplicate-label issues when min==max power.
     f_low = (
-        ds.sel(power=P_low)
+        ds.isel(power=0)
         .loc[qubit]
         .IQ_abs_norm
         .idxmin("detuning")
@@ -85,7 +88,7 @@ def plot_individual_raw_data_with_fit(
     )
 
     f_high = (
-        ds.sel(power=P_high)
+        ds.isel(power=-1)
         .loc[qubit]
         .IQ_abs_norm
         .idxmin("detuning")
@@ -112,12 +115,14 @@ def plot_individual_raw_data_with_fit(
             label="Optimal power",
         )
 
-        detuning_opt_MHz = fit.freq_shift * 1e-6
+        # Mark low-power resonance detuning (freq_low is stored in Hz from RF_frequency)
+        detuning_low_MHz = float(fit.freq_low) * 1e-6
 
         ax2.axvline(
-            x=detuning_opt_MHz,
+            x=detuning_low_MHz,
             color="blue",
             linestyle="--",
+            label="Low-power resonance",
         )
     
 

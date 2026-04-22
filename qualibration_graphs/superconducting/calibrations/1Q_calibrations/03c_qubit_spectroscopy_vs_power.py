@@ -260,8 +260,8 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             )
                             qubit.resonator.wait(
                                 node.machine.depletion_time * u.ns
-                            align()
                             )
+                            align()
                             save(I[qi], I_st[qi])
                             save(Q[qi], Q_st[qi])
 

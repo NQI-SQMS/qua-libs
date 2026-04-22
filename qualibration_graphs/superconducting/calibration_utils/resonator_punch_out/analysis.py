@@ -115,23 +115,23 @@ def fit_raw_data(
     freq_low = xr.DataArray(freq_low, dims="qubit", coords={"qubit": ds.qubit})
     freq_high = xr.DataArray(freq_high, dims="qubit", coords={"qubit": ds.qubit})
 
-    # Convention: freq_shift = freq_low - freq_high must be positive for punch-out
-    # (Kerr effect shifts the resonator to lower frequencies at high power)
-    freq_shift = freq_low - freq_high
+    # Convention: freq_shift = freq_high - freq_low must be positive for punch-out
+    # (For this device, dispersive shift moves the resonator to HIGHER frequencies at high power)
+    freq_shift = freq_high - freq_low
 
-    # Decision rule
+    # Decision rule (direction-agnostic: punch-out can shift resonance either way)
     shift_threshold = node.parameters.frequency_shift_threshold_in_hz
+    abs_shift = abs(freq_shift)
 
-    # Punch-out detected only when shift is positive and above threshold
-    large_shift = freq_shift > shift_threshold
+    # Punch-out detected when |shift| is above threshold regardless of sign
+    large_shift = abs_shift > shift_threshold
 
-    # If shift is too large → punch-out detected → choose LOW power
+    # If punch-out detected → use LOW power for readout (before Kerr nonlinearity dominates)
     optimal_power = xr.where(
         large_shift,
         P_low,
         P_high,
     )
-
 
     ds_fit = ds.assign_coords(
         freq_shift=("qubit", freq_shift.data),
@@ -155,27 +155,23 @@ def _extract_relevant_fit_parameters(
     base_freq = np.array(
         [q.resonator.RF_frequency for q in node.namespace["qubits"]]
     )
-    res_freq = fit.freq_shift + base_freq          # legacy: (freq_low - freq_high) + RF_freq
     freq_low_abs = fit.freq_low + base_freq        # actual low-power resonance frequency
 
     fit = fit.assign_coords(
-        res_freq=("qubit", res_freq.data),
         freq_low_abs=("qubit", freq_low_abs.data),
     )
-    fit.res_freq.attrs = {"long_name": "resonator frequency (legacy)", "units": "Hz"}
     fit.freq_low_abs.attrs = {"long_name": "low-power resonator frequency", "units": "Hz"}
 
-    # Data validity checks
+    # Data validity checks — direction-agnostic: accept shift in either direction
     no_nans = ~(np.isnan(fit.freq_shift.data) | np.isnan(fit.optimal_power.data))
-    # Shift must be positive (freq_low - freq_high > 0) and within the swept span
-    freq_in_range = (fit.freq_shift >= 0) & (fit.freq_shift < node.parameters.frequency_span_in_mhz * 1e6)
-    wrong_direction = fit.freq_shift < 0  # Resonator shifted up at high power - unexpected
+    # |shift| must be within the swept span
+    freq_in_range = np.abs(fit.freq_shift.data) < node.parameters.frequency_span_in_mhz * 1e6
 
-    # Punch-out detection: shift must be positive and above threshold
+    # Punch-out detection: |shift| above threshold
     shift_threshold = node.parameters.frequency_shift_threshold_in_hz
-    punchout_detected = fit.freq_shift > shift_threshold
+    punchout_detected = np.abs(fit.freq_shift.data) > shift_threshold
 
-    # Success requires: valid data, positive shift in range, AND punch-out above threshold
+    # Success requires: valid data, shift within span, AND punch-out above threshold
     success = no_nans & freq_in_range & punchout_detected
 
     fit = fit.assign_coords(success=("qubit", success.data))
@@ -187,27 +183,26 @@ def _extract_relevant_fit_parameters(
         q_idx = qubit_list.index(q)
         q_success = bool(fit.sel(qubit=q).success)
         q_shift = float(fit.freq_shift.sel(qubit=q))
+        q_abs_shift = abs(q_shift)
         q_no_nans = bool(no_nans[q_idx])
         q_freq_in_range = bool(freq_in_range[q_idx])
-        q_wrong_direction = bool(wrong_direction[q_idx])
+        q_punchout_detected = bool(punchout_detected[q_idx])
 
         # Determine error code (checked in priority order)
         if q_success:
             error_code = ResonatorPunchOutErrorCode.SUCCESS
         elif not q_no_nans:
             error_code = ResonatorPunchOutErrorCode.INVALID_DATA
-        elif q_wrong_direction:
-            error_code = ResonatorPunchOutErrorCode.WRONG_SHIFT_DIRECTION
         elif not q_freq_in_range:
             error_code = ResonatorPunchOutErrorCode.INVALID_DATA
-        elif q_shift < 1e3:  # Essentially zero shift
+        elif q_abs_shift < 1e3:  # Essentially zero shift
             error_code = ResonatorPunchOutErrorCode.NO_SHIFT_DETECTED
         else:
             error_code = ResonatorPunchOutErrorCode.SHIFT_BELOW_THRESHOLD
 
         fit_results[q] = FitParameters(
             success=q_success,
-            resonator_frequency=float(fit.res_freq.sel(qubit=q)),
+            resonator_frequency=float(fit.freq_low_abs.sel(qubit=q)),
             frequency_shift=q_shift,
             optimal_power=float(fit.optimal_power.sel(qubit=q)),
             freq_low_abs=float(fit.freq_low_abs.sel(qubit=q)),

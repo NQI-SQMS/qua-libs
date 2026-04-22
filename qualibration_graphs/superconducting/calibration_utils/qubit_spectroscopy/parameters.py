@@ -26,6 +26,9 @@ class NodeSpecificParameters(RunnableParameters):
     signal_source: str = "I_rot"
     """Signal used for analysis and plotting: 'I_rot' (PCA-rotated quadrature) or 'IQ_abs' (magnitude).
     When 'IQ_abs' is chosen the integration weight angle is NOT updated."""
+    update_iw_angle: bool = True
+    """When False, skip updating integration_weights_angle in update_state even when signal_source='I_rot'.
+    Set False in bringup graphs where the angle was already calibrated by qubit_spectroscopy_vs_power."""
 
 
 class Parameters(

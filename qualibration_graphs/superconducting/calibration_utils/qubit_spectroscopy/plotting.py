@@ -82,31 +82,31 @@ def plot_individual_data_with_fit(
         'I_rot' (default) or 'IQ_abs' — selects which variable to plot.
     """
     use_iq_abs = (signal_source == "IQ_abs")
+    # When find_dip=True, signal_for_fit = -I_rot. Display -I_rot so the plot
+    # shows a peak (consistent with spec_vs_power) and the Lorentzian overlay aligns.
+    negate = find_dip and not use_iq_abs
     plot_var = "IQ_abs" if use_iq_abs else "I_rot"
-    ylabel   = "IQ_abs [mV]" if use_iq_abs else "I_rot [mV]"
+    ylabel   = "IQ_abs [mV]" if use_iq_abs else ("-I_rot [mV]" if negate else "I_rot [mV]")
+    data_sign = -1.0 if negate else 1.0
 
     if fit is not None:
-        # base_line from peaks_dips is in signal_for_fit space.
-        # For I_rot + find_dip: signal_for_fit = -I_rot → negate baseline.
-        # For IQ_abs: signal_for_fit = IQ_abs → no sign correction needed.
-        baseline_sign = -1.0 if (find_dip and not use_iq_abs) else 1.0
         fitted_data = lorentzian_peak(
             ds.detuning,
             float(fit.amplitude.values),
             float(fit.position.values),
             float(fit.width.values) / 2,
-            baseline_sign * float(fit.base_line.mean().values),
+            float(fit.base_line.mean().values),
         )
     else:
         fitted_data = None
 
     # Primary x-axis: full RF frequency in GHz
-    (fit.assign_coords(full_freq_GHz=fit.full_freq / u.GHz)[plot_var] / u.mV).plot(ax=ax, x="full_freq_GHz")
+    (data_sign * fit.assign_coords(full_freq_GHz=fit.full_freq / u.GHz)[plot_var] / u.mV).plot(ax=ax, x="full_freq_GHz")
     ax.set_xlabel("RF frequency [GHz]")
     ax.set_ylabel(ylabel)
     # Secondary x-axis: detuning in MHz
     ax2 = ax.twiny()
-    (fit.assign_coords(detuning_MHz=fit.detuning / u.MHz)[plot_var] / u.mV).plot(ax=ax2, x="detuning_MHz", label="")
+    (data_sign * fit.assign_coords(detuning_MHz=fit.detuning / u.MHz)[plot_var] / u.mV).plot(ax=ax2, x="detuning_MHz", label="")
     ax2.set_xlabel("Detuning [MHz]")
     # Overlay the Lorentzian fit
     if fitted_data is not None:

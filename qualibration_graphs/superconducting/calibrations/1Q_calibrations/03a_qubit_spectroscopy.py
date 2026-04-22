@@ -242,9 +242,9 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             q.xy.RF_frequency = node.results["fit_results"][q.name]["frequency"]
 
             fit_result = node.results["fit_results"][q.name]
-            # Update the integration weight angle only when I_rot was used
-            # (IQ_abs carries no phase information so the angle is unchanged)
-            if node.parameters.signal_source != "IQ_abs":
+            # Update the integration weight angle only when I_rot was used and
+            # update_iw_angle is True (set False when a prior node already calibrated it).
+            if node.parameters.signal_source != "IQ_abs" and node.parameters.update_iw_angle:
                 q.resonator.operations["readout"].integration_weights_angle = fit_result["iw_angle"]
             if node.parameters.update_pulses_amplitude:
                 # Update the saturation amplitude

@@ -157,13 +157,27 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
         if shifts:
             power_shift = min(shifts)  # most negative = most conservative
-            min_power_dbm += power_shift
-            node.log(
-                f"Using adaptive power shift: {power_shift:.1f} dBm "
-                f"(from {[q.name for q in qubits]})\n"
-                f"  Min power: {min_power_dbm:.1f} dBm\n"
-                f"  Max power: {max_power_dbm:.1f} dBm"
-            )
+            candidate_min = min_power_dbm + power_shift
+            if candidate_min >= max_power_dbm:
+                # Stale or invalid adaptive shift (e.g. positive value from old code,
+                # or shift so large that the range collapses).  Reset and use the
+                # parameter-specified range.
+                node.log(
+                    f"WARNING: adaptive power shift ({power_shift:.1f} dBm) would "
+                    f"collapse the sweep range to [{candidate_min:.1f}, {max_power_dbm:.1f}] dBm. "
+                    f"Resetting adaptive_power_shift_dbm to None for all qubits."
+                )
+                for qubit in qubits:
+                    temp_data = _ensure_temp_calibration_fields(node.machine, qubit.name)
+                    temp_data.adaptive_power_shift_dbm = None
+            else:
+                min_power_dbm = candidate_min
+                node.log(
+                    f"Using adaptive power shift: {power_shift:.1f} dBm "
+                    f"(from {[q.name for q in qubits]})\n"
+                    f"  Min power: {min_power_dbm:.1f} dBm\n"
+                    f"  Max power: {max_power_dbm:.1f} dBm"
+                )
 
     # Update the readout power to match the desired range, this change will be reverted at the end of the node.
     node.namespace["tracked_resonators"] = []
@@ -183,10 +197,17 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         max_power_dbm,
         node.parameters.num_power_points,
     )
-    # The frequency sweep around the resonator resonance frequency
+    # Frequency sweep starting at the bare resonator frequency and going to higher
+    # frequencies (punch-out shifts the resonance UP at high power for this device).
+    # df_bare is the detuning of frequency_bare from the current LO/RF reference.
+    # When broad-spec has just run, RF_frequency == frequency_bare and df_bare == 0.
     span = node.parameters.frequency_span_in_mhz * u.MHz
     step = node.parameters.frequency_step_in_mhz * u.MHz
-    dfs = np.arange(-span / 2, +span / 2, step)
+    df_bare = int(round(np.mean([
+        q.resonator.frequency_bare - q.resonator.RF_frequency
+        for q in qubits
+    ])))
+    dfs = np.arange(df_bare, df_bare + span, step)
 
     # Register the sweep axes to be added to the dataset when fetching data
     node.namespace["sweep_axes"] = {
@@ -345,22 +366,9 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             bare_frequency = q.resonator.frequency_bare
             error_code = ResonatorPunchOutErrorCode(fit_result.get("error_code", 0))
 
-            # Check for wrong shift direction first - no corrective action possible
-            if error_code == ResonatorPunchOutErrorCode.WRONG_SHIFT_DIRECTION:
-                node.results["fit_results"][q.name]["corrective_action"] = int(ResonatorPunchOutCorrectiveAction.NONE)
-                node.log(
-                    f"[{q.name}] ERROR CODE: WRONG_SHIFT_DIRECTION ({ResonatorPunchOutErrorCode.WRONG_SHIFT_DIRECTION})\n"
-                    f"  CORRECTIVE ACTION: NONE\n"
-                    f"  Resonator shifted to higher frequency at high power - unexpected direction.\n"
-                    f"  Expected: freq_low - freq_high > 0 (Kerr shift lowers resonance at high power).\n"
-                    f"  Measured shift: {freq_shift / 1e6:.3f} MHz (negative = wrong direction)\n"
-                    f"  Measured frequency: {resonator_frequency / 1e9:.6f} GHz\n"
-                    f"  Manual inspection required."
-                )
-                continue
 
             # Check if power is too high (no/small positive shift and at bare frequency)
-            # freq_shift = freq_low - freq_high, so positive means resonator shifted down at high power
+            # freq_shift = freq_high - freq_low, so positive means resonator shifted UP at high power
             no_shift = freq_shift < node.parameters.frequency_shift_threshold_in_hz
             at_bare_frequency = abs(resonator_frequency - bare_frequency) < FREQUENCY_TOLERANCE_HZ
             power_too_high = no_shift and at_bare_frequency
