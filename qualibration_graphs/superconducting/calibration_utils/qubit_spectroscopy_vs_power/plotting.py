@@ -412,11 +412,15 @@ def plot_gradient_score_diagnostics(
             print(f"[{q_name}] Detected qubit frequency: {f_det:.6f} GHz")
         ax4.set_xlabel("RF frequency [GHz]")
         ax4.set_ylabel("Score [a.u.]")
-        ax4.set_title(f"{q_name} — combined score (0.5·ridge + 0.3·persist + 0.2·var)", fontsize=10)
+        ax4.set_title(f"{q_name} — combined score (0.4·ridge + 0.4·persist + 0.2·var)", fontsize=10)
 
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     return fig
 
+
+# ======================================================================
+# Power-broadening fit diagnostic
+# ======================================================================
 
 # ======================================================================
 # Utilities

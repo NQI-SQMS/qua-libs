@@ -77,6 +77,8 @@ class BringUpBoParameters(GraphParameters):
     broad_num_shots: int = 50
     broad_peak_prominence: float = 2.0
     broad_peak_width: tuple = (1, 10.0)
+    broad_peak_height: Optional[float] = None
+    broad_peak_threshold: Optional[float] = None
     broad_readout_power_dbm: Optional[float] = 0.0
     broad_max_amp: float = 0.1
     blacklist_exclusion_radius_mhz: float = 10.0
@@ -85,6 +87,7 @@ class BringUpBoParameters(GraphParameters):
     high_power_num_shots: int = 100
     high_power_readout_power_dbm: Optional[float] = 0.0
     high_power_max_amp: float = 0.1
+    high_power_save_readout_amplitude: bool = False
     punch_out_frequency_span_mhz: float = 2.0
     punch_out_frequency_step_mhz: float = 0.05
     punch_out_min_power_dbm: int = -30
@@ -93,12 +96,16 @@ class BringUpBoParameters(GraphParameters):
     punch_out_max_amp: float = 0.1
     punch_out_num_shots: int = 100
     punch_out_frequency_shift_threshold_hz: float = 0.1e6
+    punch_out_sweep_left_offset_mhz: float = 4.0
+    """MHz to extend the punch-out sweep to the LEFT of the bare resonator frequency,
+    so that the dispersive-shifted low-power resonance is within the swept window."""
     use_adaptive_span: bool = True
     low_power_frequency_span_mhz: float = 2.0
     low_power_frequency_step_mhz: float = 0.001
     low_power_num_shots: int = 100
     low_power_readout_power_dbm: Optional[float] = None
     low_power_max_amp: float = 0.1
+    low_power_save_readout_amplitude: bool = True
     save_resonator_amplitudes: bool = True
     min_dip_contrast: float = 0.02
     lo_leakage_exclusion_mhz: float = 10.0
@@ -147,12 +154,17 @@ class BringUpBoParameters(GraphParameters):
     x180_rabi_max_amp_factor: float = 1.99
     x180_rabi_amp_factor_step: float = 0.005
     x180_rabi_num_shots: int = 50
+    x180_rabi_operation: str = "x180"
+    x180_rabi_operation_length_in_ns: Optional[int] = None
     x180_rabi_max_number_pulses_per_sweep: int = 1
+    x180_rabi_update_x90: bool = True
     x180_ramsey_num_shots: int = 100
     x180_ramsey_frequency_detuning_in_mhz: float = 1.0
+    x180_ramsey_min_wait_time_in_ns: int = 16
     x180_ramsey_max_wait_time_in_ns: int = 10_000
     x180_ramsey_wait_time_num_points: int = 200
     x180_ramsey_log_or_linear_sweep: str = "linear"
+    x180_ramsey_x180_operation: str = "x180"
     x180_freq_threshold_hz: float = 50_000.0
     x180_max_iterations: int = 10
 
@@ -202,8 +214,8 @@ with QualibrationGraph.build(
         name="qubit_bo_bootstrap",
         target_rabi_freq_mhz       = graph.parameters.bo_target_rabi_freq_mhz,
         freq_search_radius_mhz     = graph.parameters.bo_freq_search_radius_mhz,
-        amp_search_min_db          = graph.parameters.bo_amp_search_min_db,
-        amp_search_max_db          = graph.parameters.bo_amp_search_max_db,
+        min_power_dbm              = graph.parameters.bo_amp_search_min_db,
+        max_power_dbm              = graph.parameters.bo_amp_search_max_db,
         n_initial_lhs              = graph.parameters.bo_n_initial_lhs,
         n_bo_iterations            = graph.parameters.bo_n_bo_iterations,
         acq_function               = graph.parameters.bo_acq_function,
@@ -225,8 +237,8 @@ with QualibrationGraph.build(
     t1 = library.nodes["05_T1"].copy(
         name="T1",
         num_shots=graph.parameters.t1_num_shots,
-        min_wait_time_ns=graph.parameters.t1_min_wait_time_ns,
-        max_wait_time_ns=graph.parameters.t1_max_wait_time_ns,
+        min_wait_time_in_ns=graph.parameters.t1_min_wait_time_ns,
+        max_wait_time_in_ns=graph.parameters.t1_max_wait_time_ns,
         wait_time_num_points=graph.parameters.t1_wait_time_num_points,
         log_or_linear_sweep=graph.parameters.t1_log_or_linear_sweep,
     )
@@ -235,8 +247,8 @@ with QualibrationGraph.build(
     # ── 6. Readout frequency optimization ─────────────────────────────────────
     readout_freq_opt = library.nodes["08a_readout_frequency_optimization"].copy(
         name="readout_frequency_optimization",
-        frequency_span_mhz=graph.parameters.readout_freq_frequency_span_mhz,
-        frequency_step_mhz=graph.parameters.readout_freq_frequency_step_mhz,
+        frequency_span_in_mhz=graph.parameters.readout_freq_frequency_span_mhz,
+        frequency_step_in_mhz=graph.parameters.readout_freq_frequency_step_mhz,
         num_shots=graph.parameters.readout_freq_num_shots,
     )
     graph.add_node(readout_freq_opt)

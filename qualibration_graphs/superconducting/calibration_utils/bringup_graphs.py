@@ -137,6 +137,12 @@ def should_restart_qubit_calibration(node, target: str) -> bool:
         logger.info(
             f"{target}: Qubit calibration failed; restarting frequency search."
         )
+        # Mark as not yet successfully calibrated so x180 fine calibration can
+        # detect exhaustion if the outer loop never exits via the success path.
+        machine = _get_machine(node)
+        if machine is not None:
+            temp = _ensure_temp_calibration(machine, target)
+            temp.qubit_calibration_succeeded = False
         return True
     # Succeeded: snapshot the bringup result so fine calibration can roll back to it.
     # IMPORTANT: _get_machine() returns the first non-None machine found in
@@ -156,6 +162,7 @@ def should_restart_qubit_calibration(node, target: str) -> bool:
         temp.initial_x180_amplitude = float(q.xy.operations["x180"].amplitude)
         temp.initial_qubit_f01 = float(q.f_01)
         temp.initial_rf_frequency = float(q.xy.RF_frequency)
+        temp.qubit_calibration_succeeded = True
         logger.info(
             f"[Qubit bringup] {target}: Saved fine-calibration backup – "
             f"x180={1e3 * temp.initial_x180_amplitude:.2f} mV, "
@@ -266,6 +273,7 @@ def build_resonator_bringup(
             num_shots=p.punch_out_num_shots,
             frequency_shift_threshold_in_hz=p.punch_out_frequency_shift_threshold_hz,
             use_adaptive_span=p.use_adaptive_span,
+            sweep_left_offset_mhz=p.punch_out_sweep_left_offset_mhz,
         )
         resonator_bringup.add_node(resonator_punch_out)
         resonator_bringup.loop(
@@ -301,8 +309,10 @@ def build_qubit_calibration(
     Sequence::
 
         qubit_spectroscopy_vs_power  [inner loop: repeat_spec_vs_power]
-        → qubit_spectroscopy
         → time_rabi
+
+    The 1D qubit spectroscopy step is omitted: the power-broadening fit inside
+    spec_vs_power already provides a well-calibrated frequency and amplitude.
 
     The caller is responsible for adding the returned subgraph to the outer
     graph and registering the outer loop with ``should_restart_qubit_calibration``.
@@ -314,10 +324,8 @@ def build_qubit_calibration(
         spec_vs_power_num_power_points, spec_vs_power_num_shots,
         spec_vs_power_min_power_dbm, spec_vs_power_max_power_dbm,
         spec_vs_power_operation, spec_vs_power_operation_len_ns,
-        spec_vs_power_linewidth_threshold_hz, spec_vs_power_max_amplitude_opx,
-        qubit_spec_frequency_span_mhz, qubit_spec_frequency_step_mhz,
-        qubit_spec_operation_len_ns, qubit_spec_operation_amplitude_factor,
-        qubit_spec_num_shots
+        spec_vs_power_max_amplitude_opx, spec_vs_power_rabi_target_periods,
+        spec_vs_power_rabi_sweep_max_duration_ns
         time_rabi_min_duration_ns, time_rabi_max_duration_ns, time_rabi_duration_step_ns,
         time_rabi_num_shots, time_rabi_operation_amplitude_factor, time_rabi_drive_power_dbm
         max_spec_vs_power_iterations
@@ -328,10 +336,10 @@ def build_qubit_calibration(
         parameters=_QubitCalibrationSubgraphParameters(),
     ) as qubit_calibration:
 
-        # 1. Spec vs power: find qubit frequency & optimal drive power
+        # 1. Spec vs power: find qubit frequency, fit broadening, set saturation/x180 amplitude
         spec_vs_power = library.nodes["03c_qubit_spectroscopy_vs_power"].copy(
             name="qubit_spectroscopy_vs_power",
-            use_adaptive_span=True,
+            use_adaptive_span=p.spec_vs_power_use_adaptive_span,
             multiplexed=p.multiplexed,
             frequency_span_in_mhz=p.spec_vs_power_frequency_span_mhz,
             frequency_step_in_mhz=p.spec_vs_power_frequency_step_mhz,
@@ -348,6 +356,8 @@ def build_qubit_calibration(
             signal_source=p.spec_vs_power_signal_source,
             peak_persistence_lookahead=p.spec_vs_power_peak_persistence_lookahead,
             peak_persistence_freq_tolerance_hz=p.spec_vs_power_peak_persistence_freq_tolerance_hz,
+            rabi_target_periods=p.spec_vs_power_rabi_target_periods,
+            rabi_sweep_max_duration_ns=p.spec_vs_power_rabi_sweep_max_duration_ns,
         )
         qubit_calibration.add_node(spec_vs_power)
         qubit_calibration.loop(
@@ -356,26 +366,8 @@ def build_qubit_calibration(
             max_iterations=p.max_spec_vs_power_iterations,
         )
 
-        # 2. Fine qubit spectroscopy: refine frequency at the calibrated power
-        qubit_spec = library.nodes["03a_qubit_spectroscopy"].copy(
-            name="qubit_spectroscopy",
-            multiplexed=p.multiplexed,
-            frequency_span_in_mhz=p.qubit_spec_frequency_span_mhz,
-            frequency_step_in_mhz=p.qubit_spec_frequency_step_mhz,
-            operation=p.qubit_spec_operation,
-            operation_len_in_ns=p.qubit_spec_operation_len_ns,
-            operation_amplitude_factor=p.qubit_spec_operation_amplitude_factor,
-            num_shots=p.qubit_spec_num_shots,
-            signal_source=p.qubit_spec_signal_source,
-            find_dip=p.qubit_spec_find_dip,
-            target_peak_width=p.qubit_spec_target_peak_width,
-            update_pulses_amplitude=p.qubit_spec_update_pulses_amplitude,
-            # Never overwrite the iw_angle set by spec_vs_power — it is already correct.
-            update_iw_angle=False,
-        )
-        qubit_calibration.add_node(qubit_spec)
-
-        # 3. Time Rabi: calibrate pi-pulse duration at the power set by spec_vs_power
+        # 2. Time Rabi: measure π-pulse duration using the saturation pulse at the
+        #    amplitude set by spec_vs_power's broadening fit.
         time_rabi = library.nodes["04c_time_rabi"].copy(
             name="time_rabi",
             multiplexed=p.multiplexed,
@@ -389,11 +381,8 @@ def build_qubit_calibration(
             max_amplitude_opx=p.time_rabi_max_amplitude_opx,
         )
         qubit_calibration.add_node(time_rabi)
-        # No inner retry loop: if time_rabi fails, the outer should_restart_qubit_calibration
-        # restarts the full frequency search with the current frequency blacklisted.
 
-        qubit_calibration.connect(spec_vs_power, qubit_spec)
-        qubit_calibration.connect(qubit_spec, time_rabi)
+        qubit_calibration.connect(spec_vs_power, time_rabi)
 
     return qubit_calibration
 
@@ -429,7 +418,10 @@ def _ensure_temp_calibration(machine, qubit_name: str):
     if qubit_name not in machine.temp_calibration:
         machine.temp_calibration[qubit_name] = TemporaryCalibrationData()
     temp = machine.temp_calibration[qubit_name]
-    for field in ("initial_x180_amplitude", "initial_qubit_f01", "initial_rf_frequency"):
+    for field in (
+        "initial_x180_amplitude", "initial_qubit_f01", "initial_rf_frequency",
+        "qubit_calibration_succeeded",   # True=OK, False=exhausted, None=unknown
+    ):
         if not hasattr(temp, field):
             object.__setattr__(temp, field, None)
     return temp
@@ -532,6 +524,17 @@ def build_x180_fine_calibration(
 
         if not _loop_state["initialized"].get(target, False):
             temp = _ensure_temp_calibration(machine, target)
+
+            # Guard: qubit_calibration exhausted all iterations without success.
+            # qubit_calibration_succeeded is set to False on every failed attempt
+            # and True only when qubit_calibration exits via the success path.
+            if getattr(temp, "qubit_calibration_succeeded", None) is False:
+                logger.warning(
+                    f"[X180 fine] {target}: Qubit calibration exhausted all iterations "
+                    "without success — skipping x180 fine calibration entirely."
+                )
+                return False
+
             if temp.initial_x180_amplitude is not None:
                 _loop_state["initial_x180_amplitude"][target] = temp.initial_x180_amplitude
                 _loop_state["initial_x90_amplitude"][target] = temp.initial_x180_amplitude / 2
@@ -621,6 +624,29 @@ def build_x180_fine_calibration(
             parameters=_RabiRamseySubgraphParameters(),
         ) as ramsey_rabi:
 
+            power_rabi = library.nodes["04b_power_rabi"].copy(
+                name="power_rabi",
+                multiplexed=p.multiplexed,
+                min_amp_factor=p.x180_rabi_min_amp_factor,
+                max_amp_factor=p.x180_rabi_max_amp_factor,
+                amp_factor_step=p.x180_rabi_amp_factor_step,
+                num_shots=p.x180_rabi_num_shots,
+                operation=p.x180_rabi_operation,
+                operation_length_in_ns=p.x180_rabi_operation_length_in_ns,
+                max_number_pulses_per_sweep=p.x180_rabi_max_number_pulses_per_sweep,
+                update_x90=p.x180_rabi_update_x90,
+                octave_gain_step_db=p.x180_rabi_octave_gain_step_db,
+                use_adaptive=p.x180_rabi_use_adaptive,
+            )
+            ramsey_rabi.add_node(power_rabi)
+            # Inner loop: retry power_rabi until the period count is correct
+            # (TOO_MANY or TOO_FEW), before proceeding to Ramsey.
+            ramsey_rabi.loop(
+                power_rabi,
+                on=should_repeat_rabi_amplitude,
+                max_iterations=p.x180_rabi_max_amplitude_iterations,
+            )
+
             ramsey = library.nodes["06a_ramsey"].copy(
                 name="ramsey",
                 multiplexed=p.multiplexed,
@@ -633,21 +659,7 @@ def build_x180_fine_calibration(
                 x180_operation=p.x180_ramsey_x180_operation,
             )
             ramsey_rabi.add_node(ramsey)
-
-            power_rabi = library.nodes["04b_power_rabi"].copy(
-                name="power_rabi",
-                multiplexed=p.multiplexed,
-                min_amp_factor=p.x180_rabi_min_amp_factor,
-                max_amp_factor=p.x180_rabi_max_amp_factor,
-                amp_factor_step=p.x180_rabi_amp_factor_step,
-                num_shots=p.x180_rabi_num_shots,
-                operation=p.x180_rabi_operation,
-                operation_length_in_ns=p.x180_rabi_operation_length_in_ns,
-                max_number_pulses_per_sweep=p.x180_rabi_max_number_pulses_per_sweep,
-                update_x90=p.x180_rabi_update_x90,
-            )
-            ramsey_rabi.add_node(power_rabi)
-            ramsey_rabi.connect(ramsey, power_rabi)
+            ramsey_rabi.connect(power_rabi, ramsey)
 
         x180_fine_calibration.add_node(ramsey_rabi)
         x180_fine_calibration.loop(
@@ -932,6 +944,7 @@ def build_g92_node_overrides(p) -> dict:
                     "num_shots": p.punch_out_num_shots,
                     "frequency_shift_threshold_in_hz": p.punch_out_frequency_shift_threshold_hz,
                     "use_adaptive_span": p.use_adaptive_span,
+                    "sweep_left_offset_mhz": p.punch_out_sweep_left_offset_mhz,
                 },
                 "resonator_spectroscopy_low_power": {
                     "multiplexed": p.multiplexed,
@@ -948,7 +961,7 @@ def build_g92_node_overrides(p) -> dict:
         "qubit_calibration": {
             "nodes": {
                 "qubit_spectroscopy_vs_power": {
-                    "use_adaptive_span": True,
+                    "use_adaptive_span": p.spec_vs_power_use_adaptive_span,
                     "multiplexed": p.multiplexed,
                     "frequency_span_in_mhz": p.spec_vs_power_frequency_span_mhz,
                     "frequency_step_in_mhz": p.spec_vs_power_frequency_step_mhz,
@@ -965,20 +978,8 @@ def build_g92_node_overrides(p) -> dict:
                     "signal_source": p.spec_vs_power_signal_source,
                     "peak_persistence_lookahead": p.spec_vs_power_peak_persistence_lookahead,
                     "peak_persistence_freq_tolerance_hz": p.spec_vs_power_peak_persistence_freq_tolerance_hz,
-                },
-                "qubit_spectroscopy": {
-                    "multiplexed": p.multiplexed,
-                    "frequency_span_in_mhz": p.qubit_spec_frequency_span_mhz,
-                    "frequency_step_in_mhz": p.qubit_spec_frequency_step_mhz,
-                    "operation": p.qubit_spec_operation,
-                    "operation_len_in_ns": p.qubit_spec_operation_len_ns,
-                    "operation_amplitude_factor": p.qubit_spec_operation_amplitude_factor,
-                    "num_shots": p.qubit_spec_num_shots,
-                    "signal_source": p.qubit_spec_signal_source,
-                    "find_dip": p.qubit_spec_find_dip,
-                    "target_peak_width": p.qubit_spec_target_peak_width,
-                    "update_pulses_amplitude": p.qubit_spec_update_pulses_amplitude,
-                    "update_iw_angle": False,
+                    "rabi_target_periods": p.spec_vs_power_rabi_target_periods,
+                    "rabi_sweep_max_duration_ns": p.spec_vs_power_rabi_sweep_max_duration_ns,
                 },
                 "time_rabi": {
                     "multiplexed": p.multiplexed,
@@ -998,16 +999,6 @@ def build_g92_node_overrides(p) -> dict:
             "nodes": {
                 "ramsey_rabi": {
                     "nodes": {
-                        "ramsey": {
-                            "multiplexed": p.multiplexed,
-                            "num_shots": p.x180_ramsey_num_shots,
-                            "frequency_detuning_in_mhz": p.x180_ramsey_frequency_detuning_in_mhz,
-                            "min_wait_time_in_ns": p.x180_ramsey_min_wait_time_in_ns,
-                            "max_wait_time_in_ns": p.x180_ramsey_max_wait_time_in_ns,
-                            "wait_time_num_points": p.x180_ramsey_wait_time_num_points,
-                            "log_or_linear_sweep": p.x180_ramsey_log_or_linear_sweep,
-                            "x180_operation": p.x180_ramsey_x180_operation,
-                        },
                         "power_rabi": {
                             "multiplexed": p.multiplexed,
                             "min_amp_factor": p.x180_rabi_min_amp_factor,
@@ -1018,6 +1009,18 @@ def build_g92_node_overrides(p) -> dict:
                             "operation_length_in_ns": p.x180_rabi_operation_length_in_ns,
                             "max_number_pulses_per_sweep": p.x180_rabi_max_number_pulses_per_sweep,
                             "update_x90": p.x180_rabi_update_x90,
+                            "octave_gain_step_db": p.x180_rabi_octave_gain_step_db,
+                            "use_adaptive": p.x180_rabi_use_adaptive,
+                        },
+                        "ramsey": {
+                            "multiplexed": p.multiplexed,
+                            "num_shots": p.x180_ramsey_num_shots,
+                            "frequency_detuning_in_mhz": p.x180_ramsey_frequency_detuning_in_mhz,
+                            "min_wait_time_in_ns": p.x180_ramsey_min_wait_time_in_ns,
+                            "max_wait_time_in_ns": p.x180_ramsey_max_wait_time_in_ns,
+                            "wait_time_num_points": p.x180_ramsey_wait_time_num_points,
+                            "log_or_linear_sweep": p.x180_ramsey_log_or_linear_sweep,
+                            "x180_operation": p.x180_ramsey_x180_operation,
                         },
                     },
                 },

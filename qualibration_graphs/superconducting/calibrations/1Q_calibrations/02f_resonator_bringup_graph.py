@@ -34,6 +34,8 @@ class ResonatorBringUpParameters(GraphParameters):
     broad_num_shots: int = 50
     broad_peak_prominence: float = 2
     broad_peak_width: tuple = (1, 10.0)
+    broad_peak_height: Optional[float] = None
+    broad_peak_threshold: Optional[float] = None
     blacklist_exclusion_radius_mhz: float = 10.0
     broad_readout_power_dbm: Optional[float] = 0
     broad_max_amp: float = 0.1
@@ -44,6 +46,7 @@ class ResonatorBringUpParameters(GraphParameters):
     high_power_num_shots: int = 100
     high_power_readout_power_dbm: Optional[float] = 0
     high_power_max_amp: float = 0.1
+    high_power_save_readout_amplitude: bool = False
 
     # Punch-out
     punch_out_frequency_span_mhz: float = 2.0
@@ -54,6 +57,9 @@ class ResonatorBringUpParameters(GraphParameters):
     punch_out_max_amp: float = 0.1
     punch_out_num_shots: int = 100
     punch_out_frequency_shift_threshold_hz: float = 0.1e6
+    punch_out_sweep_left_offset_mhz: float = 4.0
+    """MHz to extend the punch-out sweep to the LEFT of the bare resonator frequency,
+    so that the dispersive-shifted low-power resonance is within the swept window."""
     use_adaptive_span: bool = True
 
     # Low-power spectroscopy
@@ -62,6 +68,7 @@ class ResonatorBringUpParameters(GraphParameters):
     low_power_num_shots: int = 100
     low_power_readout_power_dbm: Optional[float] = None
     low_power_max_amp: float = 0.1
+    low_power_save_readout_amplitude: bool = True
 
     # Iteration limits
     max_resonator_discovery_iterations: int = 5

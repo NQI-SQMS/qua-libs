@@ -2,7 +2,7 @@ from pydantic import field_validator
 from typing import Literal, Optional
 
 from qualibrate import NodeParameters
-from qualibrate.parameters import RunnableParameters
+from qualibrate.core.parameters import RunnableParameters
 from qualibration_libs.parameters import (
     CommonNodeParameters,
     QubitsExperimentNodeParameters,

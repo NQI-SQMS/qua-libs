@@ -1,5 +1,5 @@
 from qualibrate import NodeParameters
-from qualibrate.parameters import RunnableParameters
+from qualibrate.core.parameters import RunnableParameters
 from qualibration_libs.parameters import (
     QubitsExperimentNodeParameters,
     CommonNodeParameters,
@@ -46,6 +46,19 @@ class NodeSpecificParameters(RunnableParameters):
 
     This helps find the optimal power range when the initial power is too high.
     """
+
+    sweep_left_offset_mhz: float = 4.0
+    """How far (MHz) to extend the frequency sweep to the LEFT of the bare resonator frequency.
+    The sweep runs from  (f_bare - sweep_left_offset_mhz)  to  (f_bare - sweep_left_offset_mhz + frequency_span_in_mhz).
+    A non-zero value ensures the dispersive-shifted low-power resonance, which sits
+    below the bare frequency, is captured within the swept window."""
+
+    chi2_threshold: float = 3.0
+    """Residual chi-squared threshold for the Lorentzian dip fit at each power point.
+    chi2 = SS_res / ((N - 4) * amp²). Both the low-power and high-power traces must
+    satisfy chi2 ≤ threshold for the result to be considered valid.
+    chi2 > threshold → the trace is too noisy to reliably fit a dip.
+    Default 3.0. Lower (e.g. 1.5) to reject marginal fits."""
 
 
 class Parameters(

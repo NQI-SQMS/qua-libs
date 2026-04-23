@@ -244,19 +244,56 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
 
             pi_dur = node.results["fit_results"][q.name]["pi_duration_ns"]
             if np.isfinite(pi_dur) and pi_dur > 0:
-                pi_dur_int = int(pi_dur)
+                # Round to nearest 4 ns (QUA clock cycle)
+                pi_dur_int = max(4, (int(pi_dur) // 4) * 4)
+                sigma_val  = max(4, pi_dur_int // 5)
+
+                # ── Rabi operation (typically "saturation" — SquarePulse, no sigma) ──
                 q.xy.operations[node.parameters.operation].length = pi_dur_int
                 node.log(
-                    f"[{q.name}] Updated {node.parameters.operation} duration: "
-                    f"{pi_dur:.0f} ns"
+                    f"[{q.name}] Updated {node.parameters.operation}: length={pi_dur_int} ns"
                 )
-                # x90 shares the same duration as x180 (amplitude differs)
-                if node.parameters.operation == "x180":
+
+                # ── x180: DragGaussian π pulse ──────────────────────────────────────
+                if "x180" in q.xy.operations:
+                    q.xy.operations["x180"].length = pi_dur_int
+                    try:
+                        q.xy.operations["x180"].sigma = sigma_val
+                    except (ValueError, KeyError, AttributeError):
+                        pass
+                    node.log(f"[{q.name}] Updated x180: length={pi_dur_int} ns, sigma={sigma_val} ns")
+
+                # ── x90: mirrors x180 (may be a reference; explicit update as fallback) ──
+                if "x90" in q.xy.operations:
                     try:
                         q.xy.operations["x90"].length = pi_dur_int
-                        node.log(f"[{q.name}] Updated x90 duration: {pi_dur_int} ns")
-                    except (ValueError, KeyError):
-                        pass  # x90.length may be a reference to x180.length; updates automatically
+                        q.xy.operations["x90"].sigma = sigma_val
+                    except (ValueError, KeyError, AttributeError):
+                        pass
+
+                # ── EF_x180: same length and sigma as x180 ──────────────────────
+                if "EF_x180" in q.xy.operations:
+                    q.xy.operations["EF_x180"].length = pi_dur_int
+                    try:
+                        q.xy.operations["EF_x180"].sigma = sigma_val
+                    except (ValueError, KeyError, AttributeError):
+                        pass
+                    node.log(f"[{q.name}] Updated EF_x180: length={pi_dur_int} ns, sigma={sigma_val} ns")
+
+                # ── selective_x180: 100× π time, sigma = length/5 ──────────────────
+                # Narrow-bandwidth pulse: long duration → small bandwidth ≈ 1/(pi_dur*100)
+                sel_len_int = max(4, (pi_dur_int * 100 // 4) * 4)
+                sel_sigma   = max(4, sel_len_int // 5)
+                if "selective_x180" in q.xy.operations:
+                    q.xy.operations["selective_x180"].length = sel_len_int
+                    try:
+                        q.xy.operations["selective_x180"].sigma = sel_sigma
+                    except (ValueError, KeyError, AttributeError):
+                        pass
+                    node.log(
+                        f"[{q.name}] Updated selective_x180: "
+                        f"length={sel_len_int} ns, sigma={sel_sigma} ns"
+                    )
 
 
 # %% {Save_results}

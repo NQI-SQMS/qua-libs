@@ -24,6 +24,12 @@ class NodeSpecificParameters(RunnableParameters):
     readout power/amplitude to the QUAM state after a successful run.
     Set to False to keep the QUAM state readout power unchanged (e.g. when using this node
     only for frequency calibration and the power is set just to improve the SNR)."""
+    chi2_threshold: float = 3.0
+    """Residual chi-squared threshold for the Lorentzian dip fit.
+    chi2 = SS_res / ((N - 4) * amp²) where N = number of frequency points, P = 4 free
+    parameters (center, FWHM, amplitude, offset).  chi2 ≤ threshold → real dip detected;
+    chi2 > threshold → residuals dominate the dip depth, likely fitting noise.
+    Default 3.0. Lower (e.g. 1.5) to reject marginal fits; raise if noisy data."""
 
 
 

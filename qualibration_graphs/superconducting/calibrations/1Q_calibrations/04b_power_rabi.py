@@ -255,12 +255,8 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
     - SUCCESS: updates to the fitted optimal amplitude; if duration adaptation was
       active, keeps the adapted length and clears the temp fields.
     """
-    # Maximum Octave upconversion gain (dB).  At this value the RF chain is
-    # fully open and further power can only be gained by increasing pulse duration.
+    # Maximum Octave upconversion gain (dB).
     _MAX_OCTAVE_GAIN_DB = 20.0
-    # Maximum per-step Octave gain increase (dB).  Caps the dB delta derived from
-    # num_periods to avoid large jumps between iterations.
-    _MAX_OCTAVE_GAIN_STEP_DB = 3.0
     # Minimum allowed pulse length (must be a multiple of 4 ns for QUA).
     _MIN_PULSE_LENGTH_NS = 16
 
@@ -300,6 +296,9 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             )
             operation = q.xy.operations[node.parameters.operation]
             limits = instrument_limits(q.xy)
+            # Maximum base amplitude: the sweep peak (base × max_amp_factor) must not
+            # exceed the hardware DAC limit of max_x180_wf_amplitude.
+            max_safe_base_amp = limits.max_x180_wf_amplitude / node.parameters.max_amp_factor
 
             # ── Failed calibration ──────────────────────────────────────────────
             if node.outcomes[q.name] == "failed":
@@ -355,10 +354,11 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                     #    Stage 3 – increase pulse duration once both amplitude and
                     #               Octave gain are at their maximum.
                     if error_code == PowerRabiErrorCode.TOO_FEW_PERIODS:
-                        amplitude_maxed = (
-                            current_amp * node.parameters.max_amp_factor
-                            >= limits.max_x180_wf_amplitude
-                        )
+                        # amplitude_maxed is True when the base amplitude is already at
+                        # max_safe_base_amp (= max_x180_wf_amplitude / max_amp_factor).
+                        # Stage 1 clips to this value, so if we're already there the
+                        # amplitude cannot grow further and we must escalate to Stage 2.
+                        amplitude_maxed = (current_amp >= max_safe_base_amp)
                         current_gain = _get_octave_gain(q)
                         gain_maxed = current_gain >= _MAX_OCTAVE_GAIN_DB
 
@@ -399,9 +399,9 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                             # dB equivalent of the amplitude scale factor, capped per step.
                             gain_delta_db = min(
                                 20.0 * np.log10(1.0 / num_periods),
-                                _MAX_OCTAVE_GAIN_STEP_DB,
+                                node.parameters.octave_gain_step_db,
                             )
-                            new_gain = min(current_gain + gain_delta_db, _MAX_OCTAVE_GAIN_DB)
+                            new_gain = round(min(current_gain + gain_delta_db, _MAX_OCTAVE_GAIN_DB) * 2) / 2
                             try:
                                 q.xy.frequency_converter_up.gain = new_gain
                             except AttributeError:
@@ -429,6 +429,16 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                             operation.amplitude = new_amp
                             if node.parameters.operation == "x180":
                                 q.xy.operations["x90"].amplitude = new_amp / 2
+                                if "EF_x180" in q.xy.operations:
+                                    try:
+                                        q.xy.operations["EF_x180"].amplitude = new_amp
+                                    except (ValueError, KeyError, AttributeError):
+                                        pass
+                                if "selective_x180" in q.xy.operations:
+                                    try:
+                                        q.xy.operations["selective_x180"].amplitude = new_amp / 100
+                                    except (ValueError, KeyError, AttributeError):
+                                        pass
                             fit_result["corrective_action"] = int(PowerRabiCorrectiveAction.INCREASE_AMPLITUDE)
                             fit_result["action_magnitude"] = new_amp
                             node.log(
@@ -442,11 +452,21 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                     # ── TOO_MANY_PERIODS: always scale amplitude down
                     else:
                         new_amp = float(
-                            np.clip(current_amp / num_periods, 0.0, limits.max_x180_wf_amplitude)
+                            np.clip(current_amp / num_periods, 0.0, max_safe_base_amp)
                         )
                         operation.amplitude = new_amp
                         if node.parameters.operation == "x180":
                             q.xy.operations["x90"].amplitude = new_amp / 2
+                            if "EF_x180" in q.xy.operations:
+                                try:
+                                    q.xy.operations["EF_x180"].amplitude = new_amp
+                                except (ValueError, KeyError, AttributeError):
+                                    pass
+                            if "selective_x180" in q.xy.operations:
+                                try:
+                                    q.xy.operations["selective_x180"].amplitude = new_amp / 100
+                                except (ValueError, KeyError, AttributeError):
+                                    pass
                         fit_result["corrective_action"] = int(PowerRabiCorrectiveAction.REDUCE_AMPLITUDE)
                         fit_result["action_magnitude"] = new_amp
                         node.log(
@@ -456,10 +476,20 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                         )
                 else:
                     # Degenerate case (num_periods NaN / zero): fall back to normal update
-                    safe_amp = float(np.clip(fit_result["opt_amp"], 0.0, limits.max_x180_wf_amplitude))
+                    safe_amp = float(np.clip(fit_result["opt_amp"], 0.0, max_safe_base_amp))
                     operation.amplitude = safe_amp
                     if node.parameters.operation == "x180":
                         q.xy.operations["x90"].amplitude = safe_amp / 2
+                        if "EF_x180" in q.xy.operations:
+                            try:
+                                q.xy.operations["EF_x180"].amplitude = safe_amp
+                            except (ValueError, KeyError, AttributeError):
+                                pass
+                        if "selective_x180" in q.xy.operations:
+                            try:
+                                q.xy.operations["selective_x180"].amplitude = safe_amp / 100
+                            except (ValueError, KeyError, AttributeError):
+                                pass
 
             # ── Normal update (non-adaptive, or adaptive SUCCESS) ────────────────
             else:
@@ -469,24 +499,25 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 #   Stage 2 – increase Octave gain.
                 #   Stage 3 – increase pulse duration once gain is also maxed.
                 # The outcome is forced to "failed" so the calibration loop retries.
-                if node.parameters.use_adaptive and fit_result["opt_amp"] > limits.max_x180_wf_amplitude:
-                    # Clamp amplitude to the hardware maximum.
-                    operation.amplitude = float(limits.max_x180_wf_amplitude)
+                if node.parameters.use_adaptive and fit_result["opt_amp"] > max_safe_base_amp:
+                    # Clamp amplitude to the safe base maximum.
+                    operation.amplitude = float(max_safe_base_amp)
                     if node.parameters.operation == "x180":
                         try:
-                            q.xy.operations["x90"].amplitude = float(limits.max_x180_wf_amplitude) / 2
+                            q.xy.operations["x90"].amplitude = float(max_safe_base_amp) / 2
                         except ValueError:
                             pass  # x90.amplitude is a reference; updates automatically
 
-                    ratio = fit_result["opt_amp"] / limits.max_x180_wf_amplitude  # > 1.0
+                    # ratio > 1: how much more drive is needed relative to the safe limit.
+                    ratio = fit_result["opt_amp"] / max_safe_base_amp
                     current_gain = _get_octave_gain(q)
                     gain_maxed = current_gain >= _MAX_OCTAVE_GAIN_DB
 
                     if not gain_maxed:
                         # Stage 2: increase Octave gain so the same DAC amplitude
                         # produces more RF power, reducing the required waveform value.
-                        gain_delta_db = min(20.0 * np.log10(ratio), _MAX_OCTAVE_GAIN_STEP_DB)
-                        new_gain = min(current_gain + gain_delta_db, _MAX_OCTAVE_GAIN_DB)
+                        gain_delta_db = min(20.0 * np.log10(ratio), node.parameters.octave_gain_step_db)
+                        new_gain = round(min(current_gain + gain_delta_db, _MAX_OCTAVE_GAIN_DB) * 2) / 2
                         try:
                             q.xy.frequency_converter_up.gain = new_gain
                         except AttributeError:
@@ -495,7 +526,8 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                         fit_result["action_magnitude"] = new_gain
                         node.log(
                             f"[Adaptive] {q.name}: opt_amp ({1e3 * fit_result['opt_amp']:.2f} mV) "
-                            f"exceeds hardware limit ({1e3 * limits.max_x180_wf_amplitude:.0f} mV). "
+                            f"exceeds safe base limit ({1e3 * max_safe_base_amp:.1f} mV = "
+                            f"{1e3 * limits.max_x180_wf_amplitude:.0f} mV / {node.parameters.max_amp_factor}). "
                             f"Amplitude maxed. Increasing Octave gain: "
                             f"{current_gain:.1f} dB → {new_gain:.1f} dB."
                         )
@@ -521,7 +553,7 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                         fit_result["action_magnitude"] = float(new_len)
                         node.log(
                             f"[Adaptive] {q.name}: opt_amp ({1e3 * fit_result['opt_amp']:.2f} mV) "
-                            f"exceeds hardware limit ({1e3 * limits.max_x180_wf_amplitude:.0f} mV). "
+                            f"exceeds safe base limit ({1e3 * max_safe_base_amp:.1f} mV). "
                             f"Amplitude and Octave gain maxed. "
                             f"Increasing pulse duration: {current_len:.0f} ns → {new_len} ns."
                         )
@@ -531,11 +563,21 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                     node.outcomes[q.name] = "failed"
 
                 else:
-                    # Amplitude within hardware limits: apply fitted value directly.
-                    safe_amp = float(np.clip(fit_result["opt_amp"], 0.0, limits.max_x180_wf_amplitude))
+                    # Amplitude within safe base limit: apply fitted value directly.
+                    safe_amp = float(np.clip(fit_result["opt_amp"], 0.0, max_safe_base_amp))
                     operation.amplitude = safe_amp
                     if node.parameters.operation == "x180":
                         q.xy.operations["x90"].amplitude = safe_amp / 2
+                        if "EF_x180" in q.xy.operations:
+                            try:
+                                q.xy.operations["EF_x180"].amplitude = safe_amp
+                            except (ValueError, KeyError, AttributeError):
+                                pass
+                        if "selective_x180" in q.xy.operations:
+                            try:
+                                q.xy.operations["selective_x180"].amplitude = safe_amp / 100
+                            except (ValueError, KeyError, AttributeError):
+                                pass
                     # Save the pulse length used in this run
                     pulse_len = fit_result.get("pulse_length_ns", float("nan"))
                     if np.isfinite(pulse_len):

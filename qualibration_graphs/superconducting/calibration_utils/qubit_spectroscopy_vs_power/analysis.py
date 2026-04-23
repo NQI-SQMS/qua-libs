@@ -27,6 +27,8 @@ class FitParameters:
     error_code: int = QubitSpectroscopyErrorCode.SUCCESS
     corrective_action: int = QubitSpectroscopyCorrectiveAction.NONE
     action_magnitude: float = 0.0
+    # x180/saturation power: derived from linewidth-doubling power + T_spec/T_pi scaling
+    x180_power_dbm: float = float("nan")
 
 
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
@@ -133,8 +135,8 @@ def _compute_fwhm_around_peak(detuning, signal, peak_idx):
     return right_x - left_x
 
 
-def _check_high_baseline(signal, linewidth_threshold_hz, detuning_step):
-    """Return True if signal is consistently elevated over more than 10x the linewidth threshold."""
+def _check_high_baseline(signal, fwhm0_hz, detuning_step):
+    """Return True if signal is consistently elevated over more than 10x the intrinsic linewidth."""
     y = np.asarray(signal)
     if np.all(np.isnan(y)):
         return False
@@ -148,7 +150,7 @@ def _check_high_baseline(signal, linewidth_threshold_hz, detuning_step):
     ends = np.where(changes == -1)[0]
     if len(starts) == 0:
         return False
-    return bool(np.max(ends - starts) * detuning_step > 10 * linewidth_threshold_hz)
+    return bool(np.max(ends - starts) * detuning_step > 10 * fwhm0_hz)
 
 
 def _compute_chi2_lorentzian(i_rot_slice, detuning):
@@ -193,7 +195,7 @@ def detect_qubit_by_gradient_score(
                            above 1σ at each frequency; filters single-row artefacts.
     5.  Variance det.    — variance across power; suppresses flat background.
     6.  Normalize each score to [0, 1].
-    7.  Weighted sum: 0.5 × ridge + 0.3 × persistence + 0.2 × variance.
+    7.  Weighted sum: 0.4 × ridge + 0.4 × persistence + 0.2 × variance.
     8.  Suppress the first / last 5 frequency bins (edge artefacts from convolution).
     9.  Detected frequency = argmax(combined score).
 
@@ -248,8 +250,8 @@ def detect_qubit_by_gradient_score(
 
     # Step 7 — Weighted combination (sum, not product — robust to weak detectors)
     combined_score = (
-        0.5 * ridge_score_norm
-        + 0.3 * persist_score_norm
+        0.4 * ridge_score_norm
+        + 0.4 * persist_score_norm
         + 0.2 * var_score_norm
     )
 
@@ -439,11 +441,37 @@ def fit_raw_data(
     )
     ds["linewidth"] = linewidth
 
+    # FWHM0 per qubit: median of the 3 lowest-power valid half-max FWHMs.
+    # Used to detect when linewidth has doubled (broadening onset, Omega^2*T1*T2*~3).
+    fwhm0_per_qubit = {}
+    for q in ds.qubit.values:
+        lw_q = ds.linewidth.sel(qubit=q)
+        pi_q = ds.peak_index.sel(qubit=q)
+        valid_lw = lw_q.where(pi_q >= 0).dropna("power")
+        if len(valid_lw) >= 1:
+            fwhm0_per_qubit[q] = float(np.nanmedian(valid_lw.sortby("power").values[:3]))
+        else:
+            fwhm0_per_qubit[q] = float(np.nanmin(lw_q.values)) if not np.all(np.isnan(lw_q.values)) else 1e6
+
+    ds["fwhm0"] = xr.DataArray(
+        [fwhm0_per_qubit[q] for q in ds.qubit.values],
+        dims=["qubit"], coords={"qubit": ds.qubit},
+        attrs={"long_name": "Low-power linewidth FWHM0", "units": "Hz"},
+    )
+
+    # Power selection: use the linewidth threshold parameter.
+    # The highest power where linewidth stays at or below linewidth_threshold_hz is
+    # chosen as the spectroscopy operating point.  The same power (before the safety
+    # buffer) is the reference for x180/saturation amplitude scaling.
     valid_power = (ds.peak_index >= 0) & (ds.linewidth <= p.linewidth_threshold_hz)
     primary_selected = ds.linewidth.where(valid_power).idxmax(dim="power", skipna=True)
     fallback_selected = ds.linewidth.where(ds.peak_index >= 0).idxmin(dim="power", skipna=True)
     used_fallback = ~np.isfinite(primary_selected)
-    selected_power = primary_selected.where(~used_fallback, other=fallback_selected) - p.power_buffer_db
+    # p_threshold: the threshold-crossing power (before safety buffer).
+    # Used as the reference for x180/saturation power scaling.
+    p_threshold = primary_selected.where(~used_fallback, other=fallback_selected)
+    ds["p_threshold"] = p_threshold
+    selected_power = p_threshold - p.power_buffer_db
     ds["selected_power"] = selected_power
     ds["used_fallback_power"] = used_fallback
 
@@ -480,10 +508,11 @@ def fit_raw_data(
         # qubit-induced direction → treat as "no peak found".
         no_phase_peak = bool(float(pca_variance_ratio.sel(qubit=q)) < 0.6)
 
+        fwhm0_q = fwhm0_per_qubit[q]
         over_saturated = bool(all(
             _check_high_baseline(
                 qubit_data.working_signal.isel(power=pi).values,
-                p.linewidth_threshold_hz, detuning_step,
+                fwhm0_q, detuning_step,
             )
             for pi in range(len(qubit_data.power))
         ))
@@ -518,6 +547,46 @@ def fit_raw_data(
 
         iw_angle_q = float(ds["iw_angle"].sel(qubit=q).item()) if success else float("nan")
 
+        # x180/saturation power via inverse-proportionality scaling (no T2* needed).
+        # At the threshold power (where linewidth reaches linewidth_threshold_hz), the
+        # spectroscopy saturation pulse of T_spec ns is the reference.  Since Omega = kappa * A
+        # and A * T_pi = const (for a fixed rotation angle):
+        #   P_x180 = P_threshold + 20 * log10(T_spec / T_pi_target)
+        try:
+            op_len_ns = getattr(p, "operation_len_in_ns", None)
+            if op_len_ns is None:
+                qubit_obj = node.machine.qubits[q]
+                op_len_ns = float(qubit_obj.xy.operations[getattr(p, "operation", "saturation")].length)
+            T_spec_ns = float(op_len_ns)
+        except Exception:
+            T_spec_ns = float("nan")
+
+        T_pi_target_ns = float(getattr(p, "rabi_sweep_max_duration_ns", 300.0)) / (
+            2.0 * max(1, int(getattr(p, "rabi_target_periods", 3)))
+        )
+        p_threshold_q = float(ds["p_threshold"].sel(qubit=q).values)
+
+        if np.isfinite(p_threshold_q) and np.isfinite(T_spec_ns) and T_spec_ns > 0 and T_pi_target_ns > 0:
+            x180_power_q = p_threshold_q + 20.0 * np.log10(T_spec_ns / T_pi_target_ns)
+            # Enforce hardware limits: Octave gain range [-20, +20 dB].
+            # volts2dBm(max_amplitude_opx) + 20 is the max deliverable power;
+            # volts2dBm(min_amplitude_opx) - 20 is the min detectable power.
+            try:
+                from qualang_tools.units import unit as _u_cls
+                _u = _u_cls(coerce_to_integer=True)
+                max_amp = float(getattr(p, "max_amplitude_opx", 0.5))
+                min_amp = float(getattr(p, "min_amplitude_opx", 0.001))
+                max_hw_dbm = _u.volts2dBm(max_amp) + 20.0
+                min_hw_dbm = _u.volts2dBm(min_amp) - 20.0
+                if x180_power_q > max_hw_dbm:
+                    x180_power_q = max_hw_dbm
+                elif x180_power_q < min_hw_dbm:
+                    x180_power_q = float("nan")
+            except Exception:
+                pass
+        else:
+            x180_power_q = float("nan")
+
         fit_results[q] = FitParameters(
             selected_power=float(qubit_data.selected_power.values),
             rough_qubit_frequency=float(qubit_data.rough_qubit_frequency.values),
@@ -526,6 +595,7 @@ def fit_raw_data(
             success=success,
             over_saturated=over_saturated,
             error_code=int(error_code),
+            x180_power_dbm=x180_power_q,
         )
 
     return ds, fit_results
@@ -539,6 +609,9 @@ def log_fitted_results(fit_results: Dict[str, Dict], log_callable=None):
         success = result.get("success", False)
         over_saturated = result.get("over_saturated", False)
         error_code = QubitSpectroscopyErrorCode(result.get("error_code", 0))
+        x180_pwr = result.get("x180_power_dbm", float("nan"))
+        x180_str = f"{x180_pwr:.1f} dBm" if np.isfinite(x180_pwr) else "N/A"
+
         if success:
             status = "SUCCESS" + (" (OVER-SATURATED)" if over_saturated else "")
             log_callable(
@@ -546,7 +619,8 @@ def log_fitted_results(fit_results: Dict[str, Dict], log_callable=None):
                 f"  Selected power:  {result['selected_power']:.2f} dBm\n"
                 f"  Qubit frequency: {result['rough_qubit_frequency'] / 1e9:.6f} GHz\n"
                 f"  Min linewidth:   {result['linewidth'] / 1e6:.2f} MHz\n"
-                f"  IW angle:        {result.get('iw_angle', float('nan')):.4f} rad"
+                f"  IW angle:        {result.get('iw_angle', float('nan')):.4f} rad\n"
+                f"  x180/sat power:  {x180_str}  (linewidth-doubling + T_spec/T_pi scaling)"
             )
         else:
             log_callable(

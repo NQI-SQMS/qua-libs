@@ -1,4 +1,5 @@
 from typing import List
+import numpy as np
 import xarray as xr
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
@@ -77,24 +78,20 @@ def plot_individual_raw_data_with_fit(
     P_low = float(powers[0])
     P_high = float(powers[-1])
 
-    # Use isel (position-based) to avoid duplicate-label issues when min==max power.
-    f_low = (
-        ds.isel(power=0)
-        .loc[qubit]
-        .IQ_abs_norm
-        .idxmin("detuning")
-        .item()
-        / 1e6
-    )
+    # Use Lorentzian fit centre if available; fall back to idxmin for backwards compat.
+    if "lorentz_f0" in fit and np.isfinite(float(fit.lorentz_f0.isel(power=0))):
+        f_low = float(fit.lorentz_f0.isel(power=0)) / 1e6
+    else:
+        f_low = (
+            ds.isel(power=0).loc[qubit].IQ_abs_norm.idxmin("detuning").item() / 1e6
+        )
 
-    f_high = (
-        ds.isel(power=-1)
-        .loc[qubit]
-        .IQ_abs_norm
-        .idxmin("detuning")
-        .item()
-        / 1e6
-    )
+    if "lorentz_f0" in fit and np.isfinite(float(fit.lorentz_f0.isel(power=-1))):
+        f_high = float(fit.lorentz_f0.isel(power=-1)) / 1e6
+    else:
+        f_high = (
+            ds.isel(power=-1).loc[qubit].IQ_abs_norm.idxmin("detuning").item() / 1e6
+        )
 
     ax2.plot(
         [f_low, f_high],

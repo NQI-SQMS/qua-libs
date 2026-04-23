@@ -7,7 +7,12 @@ import xarray as xr
 from lmfit import Model, Parameter
 
 from qualibrate import QualibrationNode
-from qualibration_libs.data import convert_IQ_to_V, apply_confusion_correction_to_dataset
+from qualibration_libs.data import convert_IQ_to_V
+try:
+    from qualibration_libs.data import apply_confusion_correction_to_dataset
+except ImportError:
+    def apply_confusion_correction_to_dataset(ds, node):
+        raise NotImplementedError("apply_confusion_correction_to_dataset not available in this qualibration_libs version")
 from qualibration_libs.analysis import oscillation
 
 

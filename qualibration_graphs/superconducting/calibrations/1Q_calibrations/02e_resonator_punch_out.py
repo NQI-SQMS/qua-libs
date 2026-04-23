@@ -203,11 +203,14 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     # When broad-spec has just run, RF_frequency == frequency_bare and df_bare == 0.
     span = node.parameters.frequency_span_in_mhz * u.MHz
     step = node.parameters.frequency_step_in_mhz * u.MHz
+    left_offset = int(round(node.parameters.sweep_left_offset_mhz * u.MHz))
     df_bare = int(round(np.mean([
         q.resonator.frequency_bare - q.resonator.RF_frequency
         for q in qubits
     ])))
-    dfs = np.arange(df_bare, df_bare + span, step)
+    # Shift the sweep window left so that frequencies below the bare resonator
+    # (e.g. the dispersive-shifted low-power resonance) are included.
+    dfs = np.arange(df_bare - left_offset, df_bare - left_offset + span, step)
 
     # Register the sweep axes to be added to the dataset when fetching data
     node.namespace["sweep_axes"] = {

@@ -503,21 +503,27 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             # -----------------------------
             # Update XY output power
             # -----------------------------
+            # Prefer the broadening-fit recommendation (gives the right amplitude
+            # for a time Rabi with rabi_target_periods in rabi_sweep_max_duration_ns).
+            # Fall back to the selected spectroscopy power when the fit is unavailable.
+            x180_power_dbm = node.results["fit_results"][q.name].get("x180_power_dbm", float("nan"))
+            drive_power_dbm = x180_power_dbm if np.isfinite(x180_power_dbm) else selected_power_dbm
+            power_source = "broadening fit" if np.isfinite(x180_power_dbm) else "selected power (fallback)"
+
             new_power_settings = q.xy.set_output_power(
-                power_in_dbm=selected_power_dbm,
+                power_in_dbm=drive_power_dbm,
                 max_amplitude=node.parameters.max_amplitude_opx,
                 operation=node.parameters.operation,
             )
-
             q.xy.set_output_power(
-                power_in_dbm=selected_power_dbm,
+                power_in_dbm=drive_power_dbm,
                 max_amplitude=node.parameters.max_amplitude_opx,
                 operation="x180",
             )
 
             # Save selected power and the Octave gain used to reach it so that
             # downstream nodes (e.g. power_rabi) know the full RF chain state.
-            temp_data.selected_power_dbm = selected_power_dbm
+            temp_data.selected_power_dbm = drive_power_dbm
             temp_data.selected_octave_gain_db = float(new_power_settings.get("gain", 0.0))
 
             # -----------------------------
@@ -539,14 +545,17 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             # -----------------------------
             # Logging
             # -----------------------------
+            x180_pwr = node.results["fit_results"][q.name].get("x180_power_dbm", float("nan"))
+            x180_str = f"{x180_pwr:.1f} dBm" if np.isfinite(x180_pwr) else "N/A"
             node.log(
                 f"[{q.name}] ERROR CODE: {error_code.name} ({error_code.value})\n"
                 f"  CORRECTIVE ACTION: RESET_ADAPTIVE_PARAMS\n"
                 f"  Updated state:\n"
-                f"    XY power          = {selected_power_dbm:.2f} dBm\n"
+                f"    Drive power       = {drive_power_dbm:.2f} dBm  ({power_source})\n"
                 f"    Octave gain       = {new_power_settings['gain']:.2f} dB  (saved to temp_calibration)\n"
                 f"    Pulse amplitude   = {new_power_settings['amplitude']:.4f}\n"
-                f"    Qubit frequency   = {selected_freq / 1e9:.6f} GHz"
+                f"    Qubit frequency   = {selected_freq / 1e9:.6f} GHz\n"
+                f"    x180/sat power    = {x180_str}"
             )
 
 

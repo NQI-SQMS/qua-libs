@@ -12,7 +12,7 @@ from qualang_tools.results import progress_counter
 from qualang_tools.units import unit
 
 from qualibrate import QualibrationNode, NodeParameters
-from qualibrate.parameters import RunnableParameters
+from qualibrate.core.parameters import RunnableParameters
 from qualibration_libs.parameters import (
     QubitsExperimentNodeParameters,
     CommonNodeParameters,

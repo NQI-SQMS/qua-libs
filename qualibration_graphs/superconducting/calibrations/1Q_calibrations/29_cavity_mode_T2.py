@@ -20,7 +20,7 @@ from qualibration_libs.parameters import (
     get_qubits,
     get_idle_times_in_clock_cycles,
 )
-from qualibrate.parameters import RunnableParameters
+from qualibrate.core.parameters import RunnableParameters
 from qualibrate import NodeParameters
 from qualibration_libs.data import XarrayDataFetcher
 from qualibration_libs.runtime import simulate_and_plot

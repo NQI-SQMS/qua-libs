@@ -14,12 +14,12 @@ Full automated bring-up sequence for a fixed-frequency transmon qubit.
   │        ──► resonator_spectroscopy_low_power                             │
   │  3.  qubit_calibration (subgraph, nested loops):                        │
   │        qubit_spectroscopy_vs_power    [inner loop: span expansion]      │
-  │        ──► qubit_spectroscopy                                           │
-  │        ──► power_rabi                 [inner loop: amp rescaling]       │
+  │          (power-broadening fit → sets saturation & x180 amplitude)      │
+  │        ──► time_rabi (saturation pulse)                                 │
   │        [outer loop: restart on NO_OSCILLATION → new freq search]        │
   │  4.  x180_fine_calibration (subgraph):                                  │
   │        rabi_ramsey [loop: repeat until freq converges]                  │
-  │          ramsey ──► power_rabi                                          │
+  │          power_rabi ──► ramsey                                          │
   │  5.  T1                                                                 │
   │  6.  readout_frequency_optimization                                     │
   │  7.  readout_length_optimization                                        │
@@ -109,6 +109,9 @@ class TransmonBringUpParameters(GraphParameters):
     punch_out_max_amp: float = 0.1
     punch_out_num_shots: int = 100
     punch_out_frequency_shift_threshold_hz: float = 0.1e6
+    punch_out_sweep_left_offset_mhz: float = 4.0
+    """MHz to extend the punch-out sweep to the LEFT of the bare resonator frequency,
+    so that the dispersive-shifted low-power resonance is within the swept window."""
     use_adaptive_span: bool = True
 
     # ── Resonator – low-power fine spectroscopy ───────────────────────────────
@@ -129,31 +132,27 @@ class TransmonBringUpParameters(GraphParameters):
     spec_vs_power_operation: str = "saturation"
     spec_vs_power_operation_len_ns: int = 200_000
     spec_vs_power_linewidth_threshold_hz: float = 10e6
+    """Linewidth threshold (Hz) for qubit spectroscopy vs power operating-point selection."""
     spec_vs_power_max_amplitude_opx: float = 0.24
     spec_vs_power_min_amplitude_opx: float = 0.01
     spec_vs_power_power_buffer_db: float = 3.0
     spec_vs_power_signal_source: str = "I_rot"
     spec_vs_power_peak_persistence_lookahead: int = 0
     spec_vs_power_peak_persistence_freq_tolerance_hz: float = 5e6
-
-    # ── Qubit spectroscopy (fine) ──────────────────────────────────────────────
-    qubit_spec_frequency_span_mhz: float = 50.0
-    qubit_spec_frequency_step_mhz: float = 0.1
-    qubit_spec_operation: str = "saturation"
-    qubit_spec_operation_len_ns: int = 200_000
-    qubit_spec_operation_amplitude_factor: float = 1.0
-    qubit_spec_num_shots: int = 100
-    qubit_spec_signal_source: str = "I_rot"
-    qubit_spec_find_dip: bool = True
-    qubit_spec_target_peak_width: float = 3e6
-    qubit_spec_update_pulses_amplitude: bool = False
-
+    spec_vs_power_use_adaptive_span: bool = True
+    """Enable adaptive frequency span and power expansion in qubit spectroscopy vs power."""
+    spec_vs_power_rabi_target_periods: int = 3
+    """Target Rabi periods within the time Rabi sweep for amplitude estimation."""
+    spec_vs_power_rabi_sweep_max_duration_ns: float = 300.0
+    """Upper bound of the time Rabi sweep [ns], used with rabi_target_periods to set T_pi."""
     # ── Time Rabi ─────────────────────────────────────────────────────────────
     time_rabi_min_duration_ns: int = 16
     time_rabi_max_duration_ns: int = 300
     time_rabi_duration_step_ns: int = 4
     time_rabi_num_shots: int = 200
-    time_rabi_operation: str = "x180"
+    time_rabi_operation: str = "saturation"
+    """Operation used for the time Rabi sweep. 'saturation' is used here because
+    spec_vs_power sets its amplitude to match the desired π-pulse time."""
     time_rabi_operation_amplitude_factor: float = 1.0
     time_rabi_drive_power_dbm: Optional[float] = None
     time_rabi_max_amplitude_opx: float = 0.1
@@ -166,6 +165,12 @@ class TransmonBringUpParameters(GraphParameters):
     x180_rabi_operation: str = "x180"
     x180_rabi_operation_length_in_ns: Optional[int] = None
     x180_rabi_max_number_pulses_per_sweep: int = 1
+    x180_rabi_use_adaptive: bool = True
+    """Enable adaptive amplitude/gain/duration escalation in power_rabi."""
+    x180_rabi_max_amplitude_iterations: int = 5
+    """Max retries of power_rabi to converge the period count before running Ramsey."""
+    x180_rabi_octave_gain_step_db: float = 3.0
+    """Max Octave gain step (dB) per adaptive iteration when base amplitude is maxed."""
     x180_rabi_update_x90: bool = True
     x180_ramsey_num_shots: int = 100
     x180_ramsey_frequency_detuning_in_mhz: float = 1.0

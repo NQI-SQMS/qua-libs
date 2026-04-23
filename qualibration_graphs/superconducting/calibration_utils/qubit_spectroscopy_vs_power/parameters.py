@@ -1,6 +1,6 @@
 from typing import Optional
 from qualibrate import NodeParameters
-from qualibrate.parameters import RunnableParameters
+from qualibrate.core.parameters import RunnableParameters
 from qualibration_libs.parameters import (
     QubitsExperimentNodeParameters,
     CommonNodeParameters,
@@ -53,13 +53,33 @@ class NodeSpecificParameters(RunnableParameters):
     # ------------------------------------------------------------------
     linewidth_threshold_hz: float = 2e6
     """
-    Linewidth (FWHM) threshold above which the spectroscopy
-    is considered power-broadened.
+    Linewidth (FWHM) threshold in Hz above which the spectroscopy is considered
+    power-broadened.  The highest drive power whose linewidth stays at or below
+    this threshold is chosen as the operating point.  This power (before the
+    safety buffer) is also used as the reference for scaling the saturation and
+    x180 pulse amplitudes via the T_spec / T_pi_target ratio.
     """
 
     power_buffer_db: float = 3.0
     """
-    Safety margin below the critical power (in dB).
+    Safety margin below the threshold power (in dB).
+    """
+
+    # ------------------------------------------------------------------
+    # Rabi sweep targets (used to derive saturation / x180 amplitude)
+    # ------------------------------------------------------------------
+    rabi_target_periods: int = 3
+    """
+    Number of complete Rabi oscillation periods desired within the time Rabi sweep.
+    Together with rabi_sweep_max_duration_ns this sets the target π-pulse duration
+    (T_π = rabi_sweep_max_duration_ns / (2 × rabi_target_periods)) and from there
+    the recommended saturation / x180 output power via the power-broadening fit.
+    """
+
+    rabi_sweep_max_duration_ns: float = 300.0
+    """
+    Upper bound (ns) of the planned time Rabi sweep.
+    Used with rabi_target_periods to compute the target π-pulse duration.
     """
 
     peak_persistence_lookahead: int = 0
