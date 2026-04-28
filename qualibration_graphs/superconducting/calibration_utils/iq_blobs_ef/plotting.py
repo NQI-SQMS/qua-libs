@@ -135,8 +135,8 @@ def _plot_individual_lda_boundaries(ax: Axes, qubit: dict, fit: xr.Dataset):
     # Build decision boundary grid
     all_I = np.concatenate([Ig, Ie, If])
     all_Q = np.concatenate([Qg, Qe, Qf])
-    pad_I = 0.15 * max(all_I.ptp(), 1e-9)
-    pad_Q = 0.15 * max(all_Q.ptp(), 1e-9)
+    pad_I = 0.15 * max(all_I.max() - all_I.min(), 1e-9)
+    pad_Q = 0.15 * max(all_Q.max() - all_Q.min(), 1e-9)
     xx, yy = np.meshgrid(
         np.linspace(all_I.min() - pad_I, all_I.max() + pad_I, 300),
         np.linspace(all_Q.min() - pad_Q, all_Q.max() + pad_Q, 300),

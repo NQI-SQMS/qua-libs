@@ -503,23 +503,42 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             # -----------------------------
             # Update XY output power
             # -----------------------------
-            # Prefer the broadening-fit recommendation (gives the right amplitude
-            # for a time Rabi with rabi_target_periods in rabi_sweep_max_duration_ns).
-            # Fall back to the selected spectroscopy power when the fit is unavailable.
+            # x180: set to the broadening-fit power (short pi pulse for time Rabi).
+            # saturation: set to the spectroscopy selected power (with buffer),
+            #             using the SAME Octave gain as x180 so the gain never
+            #             needs changing between nodes.
             x180_power_dbm = node.results["fit_results"][q.name].get("x180_power_dbm", float("nan"))
-            drive_power_dbm = x180_power_dbm if np.isfinite(x180_power_dbm) else selected_power_dbm
-            power_source = "broadening fit" if np.isfinite(x180_power_dbm) else "selected power (fallback)"
 
-            new_power_settings = q.xy.set_output_power(
-                power_in_dbm=drive_power_dbm,
-                max_amplitude=node.parameters.max_amplitude_opx,
-                operation=node.parameters.operation,
-            )
-            q.xy.set_output_power(
-                power_in_dbm=drive_power_dbm,
-                max_amplitude=node.parameters.max_amplitude_opx,
-                operation="x180",
-            )
+            if np.isfinite(x180_power_dbm):
+                # Step 1: set x180 → determines the Octave gain.
+                new_power_settings = q.xy.set_output_power(
+                    power_in_dbm=x180_power_dbm,
+                    max_amplitude=node.parameters.max_amplitude_opx,
+                    operation="x180",
+                )
+                # Step 2: set saturation at selected_power using the gain
+                # already written to the channel by step 1.
+                q.xy.set_output_power(
+                    power_in_dbm=selected_power_dbm,
+                    gain=q.xy.frequency_converter_up.gain,
+                    operation=node.parameters.operation,
+                )
+                power_source = "x180 from broadening fit; saturation at selected power"
+                drive_power_dbm = x180_power_dbm  # used for logging / temp_data
+            else:
+                # Fallback: both at selected power.
+                new_power_settings = q.xy.set_output_power(
+                    power_in_dbm=selected_power_dbm,
+                    max_amplitude=node.parameters.max_amplitude_opx,
+                    operation=node.parameters.operation,
+                )
+                q.xy.set_output_power(
+                    power_in_dbm=selected_power_dbm,
+                    max_amplitude=node.parameters.max_amplitude_opx,
+                    operation="x180",
+                )
+                power_source = "selected power (fallback)"
+                drive_power_dbm = selected_power_dbm
 
             # Save selected power and the Octave gain used to reach it so that
             # downstream nodes (e.g. power_rabi) know the full RF chain state.

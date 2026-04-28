@@ -224,17 +224,22 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
                 offset_q
             )
 
-            # Find the amplitude prefactor at the first pi-pulse extremum.
-            # The pi pulse is at the first MAXIMUM when the signal ascends from
-            # zero rotation (I(|f>) > I(|g>)), and at the first MINIMUM when
-            # the signal descends (I(|f>) < I(|g>)).  Detect the case by
-            # checking the sign of the fitted value at the sweep start relative
-            # to the offset: if the curve starts above offset it is descending.
+            # Find the FIRST pi-pulse extremum — the smallest amplitude that
+            # produces a pi rotation, not a 3pi/5pi harmonic.
+            # np.argmax/argmin would return the global extremum, which due to
+            # floating-point sampling may be the LAST peak when num_periods > 1.
+            # scipy find_peaks locates local extrema and we take the first one.
+            from scipy.signal import find_peaks as _find_peaks
+
             starts_high = fitted_curve_q[0] > offset_q
             if starts_high:
-                extremum_idx = np.argmin(fitted_curve_q)
+                # Descending start: pi pulse at the first local minimum
+                troughs, _ = _find_peaks(-fitted_curve_q)
+                extremum_idx = int(troughs[0]) if len(troughs) > 0 else int(np.argmin(fitted_curve_q))
             else:
-                extremum_idx = np.argmax(fitted_curve_q)
+                # Ascending start: pi pulse at the first local maximum
+                peaks, _ = _find_peaks(fitted_curve_q)
+                extremum_idx = int(peaks[0]) if len(peaks) > 0 else int(np.argmax(fitted_curve_q))
             factor_q = fit.amp_prefactor.values[extremum_idx]
             factors.append(factor_q)
 

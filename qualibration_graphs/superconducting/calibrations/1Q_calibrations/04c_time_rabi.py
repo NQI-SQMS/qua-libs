@@ -248,11 +248,15 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 pi_dur_int = max(4, (int(pi_dur) // 4) * 4)
                 sigma_val  = max(4, pi_dur_int // 5)
 
-                # ── Rabi operation (typically "saturation" — SquarePulse, no sigma) ──
-                q.xy.operations[node.parameters.operation].length = pi_dur_int
-                node.log(
-                    f"[{q.name}] Updated {node.parameters.operation}: length={pi_dur_int} ns"
-                )
+                # ── Rabi operation length ─────────────────────────────────────────
+                # Do NOT update "saturation": it is a SquarePulse used for spectroscopy
+                # and must keep its original long duration (e.g. 20 000 ns).
+                # Only update if the operation is a calibrated π-pulse type (x180, etc.).
+                if node.parameters.operation != "saturation":
+                    q.xy.operations[node.parameters.operation].length = pi_dur_int
+                    node.log(
+                        f"[{q.name}] Updated {node.parameters.operation}: length={pi_dur_int} ns"
+                    )
 
                 # ── x180: DragGaussian π pulse ──────────────────────────────────────
                 if "x180" in q.xy.operations:
@@ -272,12 +276,17 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                         pass
 
                 # ── EF_x180: same length and sigma as x180 ──────────────────────
+                # If EF_x180.length/sigma are QUAM references to x180, they update
+                # automatically and direct assignment raises ValueError — catch it.
                 if "EF_x180" in q.xy.operations:
-                    q.xy.operations["EF_x180"].length = pi_dur_int
+                    try:
+                        q.xy.operations["EF_x180"].length = pi_dur_int
+                    except (ValueError, KeyError, AttributeError):
+                        pass  # reference to x180.length propagates automatically
                     try:
                         q.xy.operations["EF_x180"].sigma = sigma_val
                     except (ValueError, KeyError, AttributeError):
-                        pass
+                        pass  # reference to x180.sigma propagates automatically
                     node.log(f"[{q.name}] Updated EF_x180: length={pi_dur_int} ns, sigma={sigma_val} ns")
 
                 # ── selective_x180: 100× π time, sigma = length/5 ──────────────────
