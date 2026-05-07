@@ -46,6 +46,15 @@ class NodeSpecificParameters(BasePowerRabiParameters):
     - If too few periods (<0.8) are found, the base pulse amplitude is scaled up similarly.
     Default is False."""
 
+    use_bayesian_optimizer: bool = False
+    """Enable Bayesian optimizer (BO) mode.  When True:
+    - create_qua_program reads amplitude, octave_gain_db, pulse_length_ns from
+      temp_calibration[qubit].bo_suggested['04b'] if present (written by BONodeController).
+    - update_state skips rule-based adaptive escalation; applies the fitted amplitude on
+      success and does nothing on failure (the BONodeController loop condition handles
+      parameter suggestion for the next iteration).
+    Set to True automatically when graph 92 runs with use_bayesian_optimizer=True."""
+
 
 class EfNodeSpecificParameters(BasePowerRabiParameters):
     """12b EF-specific parameters (no operation choice / error amplification knobs)."""

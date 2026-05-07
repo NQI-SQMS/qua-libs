@@ -37,6 +37,16 @@ class NodeSpecificParameters(RunnableParameters):
       (over-saturation = all power points show excessive linewidth or high baseline)
     """
 
+    use_bayesian_optimizer: bool = False
+    """
+    Enable Bayesian optimizer (BO) mode.  When True:
+    - create_qua_program reads frequency_span_mhz and power_shift_dbm from
+      temp_calibration[qubit].bo_suggested['03c'] if present (written by BONodeController).
+    - update_state skips rule-based adaptive field updates on failure/over-saturation;
+      the BONodeController loop condition handles parameter suggestion instead.
+    Set to True automatically when graph 92 runs with use_bayesian_optimizer=True.
+    """
+
     # ------------------------------------------------------------------
     # Averaging
     # ------------------------------------------------------------------

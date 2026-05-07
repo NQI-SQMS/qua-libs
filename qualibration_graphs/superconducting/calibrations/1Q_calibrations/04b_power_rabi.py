@@ -28,6 +28,14 @@ from qualibration_libs.data import XarrayDataFetcher
 from quam_config.instrument_limits import instrument_limits
 
 
+def _get_octave_gain(qubit) -> float:
+    """Return the Octave upconversion gain in dB, or 0.0 if not applicable."""
+    try:
+        return float(qubit.xy.frequency_converter_up.gain)
+    except AttributeError:
+        return 0.0
+
+
 # %% {Description}
 description = """
         POWER RABI WITH ERROR AMPLIFICATION
@@ -101,8 +109,71 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         "amp_prefactor": xr.DataArray(amps, attrs={"long_name": "pulse amplitude prefactor"}),
     }
 
+    # ── BO mode: snapshot or apply suggested params before config generation ───
+    if node.parameters.use_bayesian_optimizer:
+        from quam_config.my_quam import TemporaryCalibrationData
+        _BO_KEY = "04b"
+        if node.machine.temp_calibration is None:
+            node.machine.temp_calibration = {}
+
+        for qubit in qubits:
+            if qubit.name not in node.machine.temp_calibration:
+                node.machine.temp_calibration[qubit.name] = TemporaryCalibrationData()
+            temp_data = node.machine.temp_calibration[qubit.name]
+            if not hasattr(temp_data, "bo_suggested") or temp_data.bo_suggested is None:
+                object.__setattr__(temp_data, "bo_suggested", {})
+
+            bo_params = temp_data.bo_suggested.get(_BO_KEY)
+            if bo_params is None:
+                # First BO run: snapshot current QUAM state for loop-condition registration.
+                temp_data.bo_suggested[_BO_KEY] = {
+                    "amplitude": float(qubit.xy.operations[operation].amplitude),
+                    "octave_gain_db": _get_octave_gain(qubit),
+                    "pulse_length_ns": float(qubit.xy.operations[operation].length),
+                }
+                node.log(
+                    f"[{qubit.name}] BO mode: snapshotted initial Rabi params "
+                    f"(amp={qubit.xy.operations[operation].amplitude:.4f}, "
+                    f"gain={_get_octave_gain(qubit):.1f} dB, "
+                    f"len={qubit.xy.operations[operation].length} ns)."
+                )
+            else:
+                # Apply BO suggestion to QUAM before the experiment.
+                limits = instrument_limits(qubit.xy)
+                max_safe_amp = limits.max_x180_wf_amplitude / node.parameters.max_amp_factor
+
+                new_amp = float(np.clip(bo_params["amplitude"], 0.001, max_safe_amp))
+                qubit.xy.operations[operation].amplitude = new_amp
+                if operation == "x180":
+                    try:
+                        qubit.xy.operations["x90"].amplitude = new_amp / 2
+                    except (ValueError, KeyError, AttributeError):
+                        pass
+
+                new_gain = float(np.clip(bo_params["octave_gain_db"], -20.0, 20.0))
+                new_gain = round(new_gain * 2) / 2  # 0.5 dB Octave resolution
+                try:
+                    qubit.xy.frequency_converter_up.gain = new_gain
+                except AttributeError:
+                    pass
+
+                new_len = int(round(bo_params["pulse_length_ns"] / 4) * 4)
+                new_len = max(new_len, 16)
+                qubit.xy.operations[operation].length = new_len
+                if operation == "x180":
+                    try:
+                        qubit.xy.operations["x90"].length = new_len
+                    except (ValueError, KeyError, AttributeError):
+                        pass
+
+                node.log(
+                    f"[{qubit.name}] BO mode: applied suggestion — "
+                    f"amp={new_amp:.4f}, gain={new_gain:.1f} dB, len={new_len} ns."
+                )
+
     # Apply operation_length_in_ns override before config generation (modifies QUAM in-memory)
-    if node.parameters.operation_length_in_ns is not None:
+    # Note: skipped when use_bayesian_optimizer is True (BO controls pulse length).
+    if node.parameters.operation_length_in_ns is not None and not node.parameters.use_bayesian_optimizer:
         for qubit in qubits:
             qubit.xy.operations[operation].length = node.parameters.operation_length_in_ns
 
@@ -281,13 +352,6 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
         except AttributeError:
             return float(qubit.xy.intermediate_frequency)
 
-    def _get_octave_gain(qubit) -> float:
-        """Return the Octave upconversion gain in dB, or -inf if not applicable."""
-        try:
-            return float(qubit.xy.frequency_converter_up.gain)
-        except AttributeError:
-            return float("-inf")
-
     with node.record_state_updates():
         for q in node.namespace["qubits"]:
             fit_result = node.results["fit_results"][q.name]
@@ -299,6 +363,33 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             # Maximum base amplitude: the sweep peak (base × max_amp_factor) must not
             # exceed the hardware DAC limit of max_x180_wf_amplitude.
             max_safe_base_amp = limits.max_x180_wf_amplitude / node.parameters.max_amp_factor
+
+            # ── BO mode: apply fitted amplitude on success; skip on failure ───────
+            if node.parameters.use_bayesian_optimizer:
+                if node.outcomes[q.name] == "successful":
+                    safe_amp = float(np.clip(fit_result["opt_amp"], 0.0, max_safe_base_amp))
+                    operation.amplitude = safe_amp
+                    if node.parameters.operation == "x180":
+                        q.xy.operations["x90"].amplitude = safe_amp / 2
+                        if "EF_x180" in q.xy.operations:
+                            try:
+                                q.xy.operations["EF_x180"].amplitude = safe_amp
+                            except (ValueError, KeyError, AttributeError):
+                                pass
+                        if "selective_x180" in q.xy.operations:
+                            try:
+                                q.xy.operations["selective_x180"].amplitude = safe_amp / 100
+                            except (ValueError, KeyError, AttributeError):
+                                pass
+                    pulse_len = fit_result.get("pulse_length_ns", float("nan"))
+                    if np.isfinite(pulse_len):
+                        operation.length = int(pulse_len)
+                    node.log(
+                        f"[BO] {q.name}: SUCCESS — applied fitted amplitude "
+                        f"{1e3 * safe_amp:.2f} mV."
+                    )
+                # On failure: BONodeController.should_retry handles parameter suggestion.
+                continue  # skip legacy adaptive/normal paths
 
             # ── Failed calibration ──────────────────────────────────────────────
             if node.outcomes[q.name] == "failed":

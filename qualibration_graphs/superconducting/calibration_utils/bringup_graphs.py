@@ -9,8 +9,9 @@ Used by:
 """
 
 import logging
-from typing import List
+from typing import List, Optional
 
+import numpy as np
 from qualibrate import GraphParameters, QualibrationGraph, QualibrationLibrary, QualibrationNode
 
 from calibration_utils.error_codes import PowerRabiErrorCode
@@ -182,6 +183,49 @@ def should_restart_qubit_calibration(node, target: str) -> bool:
     return False
 
 
+# ── BO cost functions ──────────────────────────────────────────────────────────
+
+def spec_vs_power_bo_cost(fit_result: dict) -> float:
+    """Cost for 03c spec-vs-power: 0 = perfect, 0.5 = over-saturated, 1 = no peak."""
+    if fit_result.get("error_code", 0) != 0:
+        return 1.0
+    if fit_result.get("over_saturated", False):
+        return 0.5
+    return 0.0
+
+
+def power_rabi_bo_cost(fit_result: dict) -> float:
+    """Cost for 04b power-rabi: |num_periods - 1| capped at 2, or 2 for no oscillation."""
+    error_code = fit_result.get("error_code", 0)
+    if error_code == int(PowerRabiErrorCode.NO_OSCILLATION):
+        return 2.0
+    num_periods = fit_result.get("num_periods", 1.0)
+    if num_periods and np.isfinite(num_periods):
+        return float(min(abs(num_periods - 1.0), 2.0))
+    return 1.0
+
+
+def _get_spec_current_params(node, qubit_name: str) -> np.ndarray:
+    """Fallback: read current spectroscopy params from node when bo_suggested is absent."""
+    return np.array([
+        float(node.parameters.frequency_span_in_mhz),
+        0.0,  # no power shift applied
+    ])
+
+
+def _get_rabi_current_params(node, qubit_name: str) -> np.ndarray:
+    """Fallback: read current power-rabi params from node/machine when bo_suggested is absent."""
+    q = node.machine.qubits[qubit_name]
+    operation_name = getattr(node.parameters, "operation", "x180")
+    amplitude = float(q.xy.operations[operation_name].amplitude)
+    try:
+        gain = float(q.xy.frequency_converter_up.gain)
+    except AttributeError:
+        gain = 0.0
+    length = float(q.xy.operations[operation_name].length)
+    return np.array([amplitude, gain, length])
+
+
 # ── Subgraph builders ─────────────────────────────────────────────────────────
 
 def build_resonator_bringup(
@@ -302,7 +346,9 @@ def build_resonator_bringup(
 
 
 def build_qubit_calibration(
-    graph: QualibrationGraph, library: QualibrationLibrary
+    graph: QualibrationGraph,
+    library: QualibrationLibrary,
+    bo_spec_controller=None,
 ) -> QualibrationGraph:
     """Build and return the ``qubit_calibration`` subgraph (without the outer loop).
 
@@ -337,9 +383,11 @@ def build_qubit_calibration(
     ) as qubit_calibration:
 
         # 1. Spec vs power: find qubit frequency, fit broadening, set saturation/x180 amplitude
+        _use_bo = bo_spec_controller is not None
         spec_vs_power = library.nodes["03c_qubit_spectroscopy_vs_power"].copy(
             name="qubit_spectroscopy_vs_power",
-            use_adaptive_span=p.spec_vs_power_use_adaptive_span,
+            use_adaptive_span=p.spec_vs_power_use_adaptive_span and not _use_bo,
+            use_bayesian_optimizer=_use_bo,
             multiplexed=p.multiplexed,
             frequency_span_in_mhz=300.0,
             frequency_step_in_mhz=1.0,
@@ -360,9 +408,12 @@ def build_qubit_calibration(
             rabi_sweep_max_duration_ns=300.0,
         )
         qubit_calibration.add_node(spec_vs_power)
+        _spec_loop_condition = (
+            bo_spec_controller.should_retry if _use_bo else should_repeat_spec_vs_power
+        )
         qubit_calibration.loop(
             spec_vs_power,
-            on=should_repeat_spec_vs_power,
+            on=_spec_loop_condition,
             max_iterations=p.max_spec_vs_power_iterations,
         )
 
@@ -474,7 +525,9 @@ class _RabiRamseySubgraphParameters(GraphParameters):
 
 
 def build_x180_fine_calibration(
-    graph: QualibrationGraph, library: QualibrationLibrary
+    graph: QualibrationGraph,
+    library: QualibrationLibrary,
+    bo_rabi_controller=None,
 ) -> QualibrationGraph:
     """Build and return the ``x180_fine_calibration`` subgraph.
 
@@ -624,6 +677,7 @@ def build_x180_fine_calibration(
             parameters=_RabiRamseySubgraphParameters(),
         ) as ramsey_rabi:
 
+            _use_rabi_bo = bo_rabi_controller is not None
             power_rabi = library.nodes["04b_power_rabi"].copy(
                 name="power_rabi",
                 multiplexed=p.multiplexed,
@@ -636,14 +690,18 @@ def build_x180_fine_calibration(
                 max_number_pulses_per_sweep=1,
                 update_x90=True,
                 octave_gain_step_db=p.x180_rabi_octave_gain_step_db,
-                use_adaptive=p.x180_rabi_use_adaptive,
+                use_adaptive=p.x180_rabi_use_adaptive and not _use_rabi_bo,
+                use_bayesian_optimizer=_use_rabi_bo,
             )
             ramsey_rabi.add_node(power_rabi)
-            # Inner loop: retry power_rabi until the period count is correct
-            # (TOO_MANY or TOO_FEW), before proceeding to Ramsey.
+            # Inner loop: BO-driven (or legacy) retry until period count converges.
+            _rabi_loop_condition = (
+                bo_rabi_controller.should_retry if _use_rabi_bo
+                else should_repeat_rabi_amplitude
+            )
             ramsey_rabi.loop(
                 power_rabi,
-                on=should_repeat_rabi_amplitude,
+                on=_rabi_loop_condition,
                 max_iterations=p.x180_rabi_max_amplitude_iterations,
             )
 

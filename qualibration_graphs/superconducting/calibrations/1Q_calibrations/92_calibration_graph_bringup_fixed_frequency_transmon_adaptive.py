@@ -34,6 +34,7 @@ into the node copies in bringup_graphs.py and can be edited there or through
 the Qualibrate GUI at the individual node level.
 """
 
+from pathlib import Path
 from typing import List, Optional
 
 from qualibrate import (
@@ -48,7 +49,12 @@ from calibration_utils.bringup_graphs import (
     build_ef_bringup,
     build_cavity_bringup,
     should_restart_qubit_calibration,
+    spec_vs_power_bo_cost,
+    power_rabi_bo_cost,
+    _get_spec_current_params,
+    _get_rabi_current_params,
 )
+from calibration_utils.bayesian_optimizer import BONodeController
 
 library = QualibrationLibrary.get_active_library()
 
@@ -101,6 +107,16 @@ class TransmonBringUpParameters(GraphParameters):
     x180_rabi_octave_gain_step_db: float = 10.0
     """Max Octave gain step (dB) per adaptive iteration when base amplitude is maxed."""
 
+    # ── Bayesian optimizer ─────────────────────────────────────────────────────
+    use_bayesian_optimizer: bool = True
+    """Replace rule-based retry loops with a GP Bayesian optimizer.
+    When True, the BO drives parameter search for spec_vs_power (03c) and
+    power_rabi (04b); rule-based adaptive escalation is disabled for those nodes.
+    Observations are persisted in bo_state/ alongside state.json so the optimizer
+    learns across calibration sessions.  Set False to revert to legacy behaviour."""
+    bo_state_dir: str = "bo_state"
+    """Directory (relative to CWD) where BO observation JSON files are stored."""
+
     # ── Convergence thresholds ─────────────────────────────────────────────────
     x180_freq_threshold_hz: float = 50_000.0
     """Stop the power_rabi → ramsey loop when |GE detuning| < this value [Hz]."""
@@ -137,8 +153,44 @@ with QualibrationGraph.build(
     resonator_bringup = build_resonator_bringup(graph, library)
     graph.add_node(resonator_bringup)
 
-    # ── 3. Qubit calibration (FSM: spec-vs-power → time Rabi) ─────────────────
-    qubit_calibration = build_qubit_calibration(graph, library)
+    # ── BO controllers (instantiated once per graph build) ────────────────────
+    _bo_persist_dir = (
+        Path(graph.parameters.bo_state_dir) if graph.parameters.use_bayesian_optimizer
+        else None
+    )
+    _bo_spec_controller = None
+    _bo_rabi_controller = None
+    if graph.parameters.use_bayesian_optimizer:
+        _bo_spec_controller = BONodeController(
+            node_key="03c",
+            param_names=["frequency_span_mhz", "power_shift_dbm"],
+            param_bounds={
+                "frequency_span_mhz": (50.0, 800.0),
+                "power_shift_dbm": (-30.0, 30.0),
+            },
+            cost_fn=spec_vs_power_bo_cost,
+            get_current_params=_get_spec_current_params,
+            converged_cost=0.05,
+            persist_dir=_bo_persist_dir,
+        )
+        _bo_rabi_controller = BONodeController(
+            node_key="04b",
+            param_names=["amplitude", "octave_gain_db", "pulse_length_ns"],
+            param_bounds={
+                "amplitude": (0.001, 0.49),
+                "octave_gain_db": (-10.0, 20.0),
+                "pulse_length_ns": (16.0, 2000.0),
+            },
+            cost_fn=power_rabi_bo_cost,
+            get_current_params=_get_rabi_current_params,
+            converged_cost=0.1,
+            persist_dir=_bo_persist_dir,
+        )
+
+    # ── 3. Qubit calibration (BO-driven or legacy spec-vs-power → time Rabi) ──
+    qubit_calibration = build_qubit_calibration(
+        graph, library, bo_spec_controller=_bo_spec_controller
+    )
     graph.add_node(qubit_calibration)
     graph.loop(
         qubit_calibration,
@@ -146,8 +198,10 @@ with QualibrationGraph.build(
         max_iterations=graph.parameters.max_qubit_calibration_iterations,
     )
 
-    # ── 4. X180 fine calibration (power_rabi → ramsey loop) ───────────────────
-    x180_fine_calibration = build_x180_fine_calibration(graph, library)
+    # ── 4. X180 fine calibration (BO-driven or legacy power_rabi → ramsey) ────
+    x180_fine_calibration = build_x180_fine_calibration(
+        graph, library, bo_rabi_controller=_bo_rabi_controller
+    )
     graph.add_node(x180_fine_calibration)
 
     # ── 5. T1 ─────────────────────────────────────────────────────────────────

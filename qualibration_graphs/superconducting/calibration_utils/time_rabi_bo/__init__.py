@@ -18,7 +18,7 @@ from calibration_utils.time_rabi_bo.parameters import TimeRabiBoParameters
 from calibration_utils.time_rabi_bo.analysis import (
     fit_time_rabi, compute_cost, TimeRabiFitResult, rabi_fit_curve,
 )
-from calibration_utils.time_rabi_bo.bo_optimizer import BOOptimizer
+from calibration_utils.bayesian_optimizer.bo_optimizer import BOOptimizer
 from calibration_utils.time_rabi_bo.plotting import plot_bo_results
 
 __all__ = [

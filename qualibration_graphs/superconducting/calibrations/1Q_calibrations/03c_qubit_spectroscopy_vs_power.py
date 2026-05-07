@@ -64,6 +64,7 @@ def _ensure_temp_calibration_fields(machine, qubit_name: str) -> TemporaryCalibr
         'adaptive_num_shots': None,
         'selected_power_dbm': None,
         'selected_octave_gain_db': None,
+        'bo_suggested': None,
         'last_updated': None,
         'notes': None,
     }
@@ -152,52 +153,66 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             )
             node.namespace["tracked_qubits"].append(xy)
 
-    # Use adaptive frequency span/step if available (from previous failed calibrations)
-    # Otherwise fall back to the default parameters
+    # Determine frequency span and power range (BO > adaptive fields > defaults)
     frequency_span_mhz = node.parameters.frequency_span_in_mhz
     frequency_step_mhz = node.parameters.frequency_step_in_mhz
+    min_power_dbm = node.parameters.min_power_dbm
+    max_power_dbm = node.parameters.max_power_dbm
 
-    if (
-        node.parameters.use_adaptive_span
-        and node.machine.temp_calibration is not None
-        and len(qubits) == 1
-    ):
-        # Only use adaptive span/step for single-qubit calibrations
+    if node.machine.temp_calibration is not None and len(qubits) == 1:
         qubit = qubits[0]
         temp_data = _ensure_temp_calibration_fields(node.machine, qubit.name)
 
-        if temp_data.adaptive_frequency_span_mhz is not None:
-            frequency_span_mhz = temp_data.adaptive_frequency_span_mhz
-            node.log(
-                f"[{qubit.name}] Using adaptive frequency span: {frequency_span_mhz:.1f} MHz"
-            )
+        if node.parameters.use_bayesian_optimizer:
+            _BO_KEY = "03c"
+            # Ensure bo_suggested dict exists
+            if not hasattr(temp_data, "bo_suggested") or temp_data.bo_suggested is None:
+                object.__setattr__(temp_data, "bo_suggested", {})
+            bo_params = temp_data.bo_suggested.get(_BO_KEY)
+
+            if bo_params is None:
+                # First BO run: snapshot current parameters so the loop condition
+                # can register them as the first observation.
+                temp_data.bo_suggested[_BO_KEY] = {
+                    "frequency_span_mhz": float(frequency_span_mhz),
+                    "power_shift_dbm": 0.0,
+                }
+                node.log(
+                    f"[{qubit.name}] BO mode: snapshotted initial params "
+                    f"(span={frequency_span_mhz:.1f} MHz, shift=0.0 dBm)."
+                )
+            else:
+                # Apply BO suggestion
+                frequency_span_mhz = bo_params["frequency_span_mhz"]
+                power_shift = bo_params["power_shift_dbm"]
+                min_power_dbm += power_shift
+                max_power_dbm += power_shift
+                node.log(
+                    f"[{qubit.name}] BO mode: span={frequency_span_mhz:.1f} MHz, "
+                    f"power shift={power_shift:.1f} dBm → "
+                    f"[{min_power_dbm:.1f}, {max_power_dbm:.1f}] dBm"
+                )
+
+        elif node.parameters.use_adaptive_span:
+            # Legacy adaptive path
+            if temp_data.adaptive_frequency_span_mhz is not None:
+                frequency_span_mhz = temp_data.adaptive_frequency_span_mhz
+                node.log(
+                    f"[{qubit.name}] Using adaptive frequency span: {frequency_span_mhz:.1f} MHz"
+                )
+            power_shift = temp_data.adaptive_power_shift_dbm
+            if power_shift is not None:
+                min_power_dbm += power_shift
+                max_power_dbm += power_shift
+                node.log(
+                    f"[{qubit.name}] Using adaptive power shift: {power_shift:.1f} dBm\n"
+                    f"  Min power: {min_power_dbm:.1f} dBm\n"
+                    f"  Max power: {max_power_dbm:.1f} dBm"
+                )
 
     span = frequency_span_mhz * u.MHz
     step = frequency_step_mhz * u.MHz
     dfs = np.arange(-span / 2, +span / 2, step)
-
-    # Use adaptive power shift if available (from previous over-saturation detection)
-    min_power_dbm = node.parameters.min_power_dbm
-    max_power_dbm = node.parameters.max_power_dbm
-
-    if (
-        node.parameters.use_adaptive_span
-        and node.machine.temp_calibration is not None
-        and len(qubits) == 1
-    ):
-        # Only use adaptive power shift for single-qubit calibrations
-        qubit = qubits[0]
-        temp_data = _ensure_temp_calibration_fields(node.machine, qubit.name)
-
-        power_shift = temp_data.adaptive_power_shift_dbm
-        if power_shift is not None:
-            min_power_dbm += power_shift
-            max_power_dbm += power_shift
-            node.log(
-                f"[{qubit.name}] Using adaptive power shift: {power_shift:.1f} dBm\n"
-                f"  Min power: {min_power_dbm:.1f} dBm\n"
-                f"  Max power: {max_power_dbm:.1f} dBm"
-            )
 
     powers_dbm = np.linspace(
         min_power_dbm,
@@ -386,41 +401,48 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             # instance if fields are missing
             temp_data = _ensure_temp_calibration_fields(node.machine, q.name)
 
+            error_code = QubitSpectroscopyErrorCode(node.results["fit_results"][q.name].get("error_code", 0))
+            is_over_saturated = node.results["fit_results"][q.name].get("over_saturated", False)
+            _BO_KEY = "03c"
+            bo_is_driving = node.parameters.use_bayesian_optimizer and (
+                temp_data.bo_suggested is not None
+                and _BO_KEY in (temp_data.bo_suggested or {})
+            )
+
             if node.outcomes[q.name] == "failed":
                 # -----------------------------
                 # Handle failed calibration
                 # -----------------------------
-                # Get error code
-                error_code = QubitSpectroscopyErrorCode(node.results["fit_results"][q.name].get("error_code", 0))
-
-                if node.parameters.use_adaptive_span:
-                    # Get current adaptive parameters
+                if bo_is_driving:
+                    # BO path: the loop condition will register the cost and write
+                    # the next suggestion; nothing to do here.
+                    node.log(
+                        f"[{q.name}] ERROR CODE: {error_code.name} ({error_code.value})\n"
+                        f"  BO mode: deferring parameter adjustment to BONodeController."
+                    )
+                elif node.parameters.use_adaptive_span:
+                    # Legacy adaptive path
                     current_span = node.parameters.frequency_span_in_mhz
                     if temp_data.adaptive_frequency_span_mhz is not None:
                         current_span = temp_data.adaptive_frequency_span_mhz
 
-                    # Get current power shift
                     current_power_shift = temp_data.adaptive_power_shift_dbm or 0.0
 
-                    # No peak at all → increase frequency span AND power
                     new_span = min(current_span * FREQUENCY_SPAN_EXPANSION_FACTOR, MAX_FREQUENCY_SPAN_MHZ)
                     new_power_shift = current_power_shift + POWER_INCREASE_DBM
 
-                    # Update frequency span
                     if new_span < MAX_FREQUENCY_SPAN_MHZ:
                         temp_data.adaptive_frequency_span_mhz = new_span
                         span_msg = f"  Current span: {current_span:.1f} MHz\n  New span:     {new_span:.1f} MHz"
                     else:
                         span_msg = f"  Frequency span: {MAX_FREQUENCY_SPAN_MHZ:.1f} MHz (max reached)"
 
-                    # Update power shift
                     if node.parameters.max_power_dbm + new_power_shift <= MAX_POWER_DBM:
                         temp_data.adaptive_power_shift_dbm = new_power_shift
                         power_msg = f"  Current power shift: {current_power_shift:.1f} dBm\n  New power shift:     {new_power_shift:.1f} dBm"
                     else:
                         power_msg = f"  Power shift: {current_power_shift:.1f} dBm (max reached)"
 
-                    # Update fit results with corrective actions
                     expansion_percent = int((FREQUENCY_SPAN_EXPANSION_FACTOR - 1) * 100)
                     node.results["fit_results"][q.name]["corrective_action"] = int(QubitSpectroscopyCorrectiveAction.EXPAND_FREQUENCY_SPAN)
                     node.results["fit_results"][q.name]["action_magnitude"] = float(expansion_percent)
@@ -442,49 +464,50 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             # -----------------------------
             # Check for over-saturation (even if calibration succeeded)
             # -----------------------------
-            is_over_saturated = node.results["fit_results"][q.name].get("over_saturated", False)
-            error_code = QubitSpectroscopyErrorCode(node.results["fit_results"][q.name].get("error_code", 0))
-
-            if is_over_saturated and node.parameters.use_adaptive_span:
-                # Get current power shift (fields already initialized at top of loop)
-                current_shift = temp_data.adaptive_power_shift_dbm or 0.0
-
-                # Apply additional power reduction
-                new_shift = current_shift + POWER_DECREASE_DBM
-
-                # Check if we can reduce further
-                if node.parameters.min_power_dbm + new_shift >= MIN_POWER_DBM:
-                    temp_data.adaptive_power_shift_dbm = new_shift
-
-                    # Update fit results with corrective action
-                    node.results["fit_results"][q.name]["corrective_action"] = int(QubitSpectroscopyCorrectiveAction.DECREASE_POWER)
-                    node.results["fit_results"][q.name]["action_magnitude"] = float(POWER_DECREASE_DBM)
-
+            if is_over_saturated:
+                if bo_is_driving:
+                    # BO path: loop condition handles the next power suggestion.
                     node.log(
                         f"[{q.name}] ERROR CODE: {error_code.name} ({error_code.value})\n"
-                        f"  CORRECTIVE ACTION: DECREASE_POWER ({POWER_DECREASE_DBM} dBm)\n"
-                        f"  Current power shift: {current_shift:.1f} dBm\n"
-                        f"  New power shift:     {new_shift:.1f} dBm\n"
-                        f"  Next min power:      {node.parameters.min_power_dbm + new_shift:.1f} dBm\n"
-                        f"  Next max power:      {node.parameters.max_power_dbm + new_shift:.1f} dBm"
+                        f"  BO mode: over-saturation detected — deferring to BONodeController."
                     )
-                else:
-                    node.results["fit_results"][q.name]["corrective_action"] = int(QubitSpectroscopyCorrectiveAction.NONE)
-                    node.log(
-                        f"[{q.name}] ERROR CODE: {error_code.name} ({error_code.value})\n"
-                        f"  CORRECTIVE ACTION: NONE (minimum power limit reached: {MIN_POWER_DBM} dBm)"
-                    )
+                    continue
+                elif node.parameters.use_adaptive_span:
+                    current_shift = temp_data.adaptive_power_shift_dbm or 0.0
+                    new_shift = current_shift + POWER_DECREASE_DBM
 
-                # Don't update state parameters if over-saturated - retry with lower power
-                continue
+                    if node.parameters.min_power_dbm + new_shift >= MIN_POWER_DBM:
+                        temp_data.adaptive_power_shift_dbm = new_shift
+                        node.results["fit_results"][q.name]["corrective_action"] = int(QubitSpectroscopyCorrectiveAction.DECREASE_POWER)
+                        node.results["fit_results"][q.name]["action_magnitude"] = float(POWER_DECREASE_DBM)
+                        node.log(
+                            f"[{q.name}] ERROR CODE: {error_code.name} ({error_code.value})\n"
+                            f"  CORRECTIVE ACTION: DECREASE_POWER ({POWER_DECREASE_DBM} dBm)\n"
+                            f"  Current power shift: {current_shift:.1f} dBm\n"
+                            f"  New power shift:     {new_shift:.1f} dBm\n"
+                            f"  Next min power:      {node.parameters.min_power_dbm + new_shift:.1f} dBm\n"
+                            f"  Next max power:      {node.parameters.max_power_dbm + new_shift:.1f} dBm"
+                        )
+                    else:
+                        node.results["fit_results"][q.name]["corrective_action"] = int(QubitSpectroscopyCorrectiveAction.NONE)
+                        node.log(
+                            f"[{q.name}] ERROR CODE: {error_code.name} ({error_code.value})\n"
+                            f"  CORRECTIVE ACTION: NONE (minimum power limit reached: {MIN_POWER_DBM} dBm)"
+                        )
+                    continue
 
             # -----------------------------
-            # Successful calibration: reset adaptive parameters
+            # Successful calibration: reset adaptive / BO parameters
             # -----------------------------
-            # (fields already initialized at top of loop)
             temp_data.adaptive_frequency_span_mhz = None
             temp_data.adaptive_power_shift_dbm = None
             temp_data.adaptive_num_shots = None
+            # Clear BO suggestion on success so next standalone run starts fresh.
+            # (BONodeController.should_retry also clears it on convergence, but
+            # doing it here ensures cleanup even if the loop exits without calling
+            # should_retry, e.g. when the first run already succeeds.)
+            if temp_data.bo_suggested and _BO_KEY in temp_data.bo_suggested:
+                del temp_data.bo_suggested[_BO_KEY]
 
             # Update fit results with success corrective action
             node.results["fit_results"][q.name]["corrective_action"] = int(QubitSpectroscopyCorrectiveAction.RESET_ADAPTIVE_PARAMS)
@@ -509,6 +532,22 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             #             needs changing between nodes.
             x180_power_dbm = node.results["fit_results"][q.name].get("x180_power_dbm", float("nan"))
 
+            # For MW-FEM channels the achievable power is bounded by both the
+            # max full_scale_power_dbm (16 dBm) and max_amplitude_opx:
+            #   max_power = 16 + 20*log10(max_amplitude_opx)
+            # If the linewidth-fit estimate exceeds that, fall back to
+            # selected_power_dbm instead.
+            if not hasattr(q.xy, "frequency_converter_up") and np.isfinite(x180_power_dbm):
+                mw_max_power_dbm = 16.0 + 20.0 * np.log10(node.parameters.max_amplitude_opx)
+                if x180_power_dbm > mw_max_power_dbm:
+                    node.log(
+                        f"[{q.name}] x180 power estimate ({x180_power_dbm:.1f} dBm) exceeds "
+                        f"MW-FEM achievable maximum ({mw_max_power_dbm:.1f} dBm with "
+                        f"max_amplitude={node.parameters.max_amplitude_opx}); "
+                        f"falling back to selected power."
+                    )
+                    x180_power_dbm = float("nan")
+
             if np.isfinite(x180_power_dbm):
                 # Step 1: set x180 → determines the Octave gain.
                 new_power_settings = q.xy.set_output_power(
@@ -516,13 +555,22 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                     max_amplitude=node.parameters.max_amplitude_opx,
                     operation="x180",
                 )
-                # Step 2: set saturation at selected_power using the gain
-                # already written to the channel by step 1.
-                q.xy.set_output_power(
-                    power_in_dbm=selected_power_dbm,
-                    gain=q.xy.frequency_converter_up.gain,
-                    operation=node.parameters.operation,
-                )
+                # Step 2: set saturation at selected_power, locking the
+                # hardware gain/full-scale already set by step 1.
+                if hasattr(q.xy, "frequency_converter_up"):
+                    # IQ/Octave channel: lock Octave gain
+                    q.xy.set_output_power(
+                        power_in_dbm=selected_power_dbm,
+                        gain=q.xy.frequency_converter_up.gain,
+                        operation=node.parameters.operation,
+                    )
+                else:
+                    # MW-FEM channel: lock full_scale_power_dbm
+                    q.xy.set_output_power(
+                        power_in_dbm=selected_power_dbm,
+                        full_scale_power_dbm=q.xy.opx_output.full_scale_power_dbm,
+                        operation=node.parameters.operation,
+                    )
                 power_source = "x180 from broadening fit; saturation at selected power"
                 drive_power_dbm = x180_power_dbm  # used for logging / temp_data
             else:
@@ -571,7 +619,7 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 f"  CORRECTIVE ACTION: RESET_ADAPTIVE_PARAMS\n"
                 f"  Updated state:\n"
                 f"    Drive power       = {drive_power_dbm:.2f} dBm  ({power_source})\n"
-                f"    Octave gain       = {new_power_settings['gain']:.2f} dB  (saved to temp_calibration)\n"
+                f"    HW gain/fsp       = {new_power_settings.get('gain', new_power_settings.get('full_scale_power_dbm', float('nan'))):.2f} dB  (saved to temp_calibration)\n"
                 f"    Pulse amplitude   = {new_power_settings['amplitude']:.4f}\n"
                 f"    Qubit frequency   = {selected_freq / 1e9:.6f} GHz\n"
                 f"    x180/sat power    = {x180_str}"
