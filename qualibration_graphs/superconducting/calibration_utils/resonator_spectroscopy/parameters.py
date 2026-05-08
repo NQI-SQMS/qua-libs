@@ -30,6 +30,11 @@ class NodeSpecificParameters(RunnableParameters):
     parameters (center, FWHM, amplitude, offset).  chi2 ≤ threshold → real dip detected;
     chi2 > threshold → residuals dominate the dip depth, likely fitting noise.
     Default 3.0. Lower (e.g. 1.5) to reject marginal fits; raise if noisy data."""
+    use_phase_fallback: bool = True
+    """When True (default), if the amplitude-based resonator fit fails, automatically retry
+    using the derivative of the phase signal (dφ/df), which produces a Lorentzian-like peak
+    at the resonator frequency.  Useful for high-Q or SRF resonators where the amplitude dip
+    is weak but the phase response is strong."""
 
 
 

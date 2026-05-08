@@ -170,17 +170,21 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 with for_(*from_array(df, dfs)):
                     # Time delay loop
                     with for_each_(t_delay, times):
-                        # Reset the qubits
+                        # --- Reset ---
                         for i, qubit in multiplexed_qubits.items():
                             qubit.reset(node.parameters.reset_type, node.parameters.simulate)
                             # Extra wait to ensure long distortions have fully decayed between experiment repetitions
                             qubit.wait(times.max())
                         align()
 
+                        # --- Frequency detuning ---
                         for i, qubit in multiplexed_qubits.items():
                             # Step the qubit spectroscopy tone frequency
                             qubit.xy.update_frequency(df + qubit.xy.intermediate_frequency - if_update[i])
                             qubit.align()
+
+                        # --- Qubit drive ---
+                        for i, qubit in multiplexed_qubits.items():
                             # Play the flux pulse
                             qubit.z.play(
                                 "const",
@@ -195,6 +199,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             qubit.align()
                             qubit.wait(200)
 
+                        # --- Readout ---
                         for i, qubit in multiplexed_qubits.items():
                             qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                             save(I[i], I_st[i])
@@ -202,7 +207,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             if node.parameters.use_state_discrimination:
                                 assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                         align()
 
         with stream_processing():

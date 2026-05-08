@@ -8,7 +8,6 @@ from qm.qua import *
 
 from qualang_tools.multi_user import qm_session
 from qualang_tools.results import progress_counter
-from qualang_tools.units import unit
 from qualang_tools.bakery.randomized_benchmark_c1 import c1_table
 from qualang_tools.loops import from_array
 
@@ -81,8 +80,7 @@ node.machine = Quam.load()
 def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     """Create the sweep axes and generate the QUA program from the pulse sequence and the node parameters."""
     # Class containing tools to help handle units and conversions.
-    u = unit(coerce_to_integer=True)
-    # Get the active qubits from the node and organize them by batches
+# Get the active qubits from the node and organize them by batches
     node.namespace["qubits"] = qubits = get_qubits(node)
     num_qubits = len(qubits)
     num_of_sequences = node.parameters.num_random_sequences  # Number of random sequences
@@ -227,15 +225,15 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     assign(sequence_list[depth], inv_gate_list[depth - 1])
 
                     with for_(n, 0, n < n_avg, n + 1):
+                        # --- Reset ---
                         # Initialize the qubits
                         for i, qubit in multiplexed_qubits.items():
                             qubit.reset(node.parameters.reset_type, node.parameters.simulate)
-                        # Align the two elements to play the sequence after qubit initialization
                         align()
 
-                        # Manipulate the qubits
+                        # --- Qubit drive ---
+                        # The strict_timing ensures that the sequence will be played without gaps
                         for i, qubit in multiplexed_qubits.items():
-                            # The strict_timing ensures that the sequence will be played without gaps
                             if strict_timing:
                                 with strict_timing_():
                                     # Play the random sequence of desired depth
@@ -244,7 +242,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                 play_sequence(sequence_list, depth, qubit)
                         align()
 
-                        # Readout the qubits
+                        # --- Readout ---
                         for i, qubit in multiplexed_qubits.items():
                             qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                             save(I[i], I_st[i])
@@ -252,7 +250,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             if node.parameters.use_state_discrimination:
                                 assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                         align()
                     # Reset the last gate of the sequence back to the original Clifford gate
                     # (that was replaced by the recovery gate at the beginning)

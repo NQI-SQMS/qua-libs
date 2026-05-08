@@ -15,7 +15,6 @@ from qm.qua import *
 from qualang_tools.bakery import baking
 from qualang_tools.multi_user import qm_session
 from qualang_tools.results import progress_counter
-from qualang_tools.units import unit
 from qualibrate import QualibrationNode
 from qualibration_libs.data import XarrayDataFetcher
 from qualibration_libs.parameters import get_qubits
@@ -97,7 +96,6 @@ stored_gui_update_flag = node.parameters.update_state_from_GUI
 def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     """Create the sweep axes and generate the QUA program from the pulse sequence and the node parameters."""
     # Class containing tools to help handle units and conversions.
-    u = unit(coerce_to_integer=True)
     # Get the active qubits from the node and organize them by batches
     node.namespace["qubits"] = qubits = get_qubits(node)
     num_qubits = len(qubits)
@@ -150,15 +148,19 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             with for_(idx, 1, idx <= cryoscope_len, idx + 1):
                 # Loop over the phase of the second ramsey x90 pulse to reconstruct the qubit phase
                 with for_each_(frame, frames):
+                    # --- Reset ---
                     # Qubit initialization
+                    align()
                     qubit.reset(node.parameters.reset_type, node.parameters.simulate)
                     align()
+
                     ################################################################################################
                     # The duration argument in the play command can only produce pulses with duration multiple of  #
                     # 4ns. To overcome this limitation we use the baking tool from the qualang-tools package to    #
                     # generate pulses with 1ns granularity. To avoid creating custom waveforms for each iteration  #
                     # we combine baked pulses with dynamically stretched (multiple of 4ns) pulses.                 #
                     ################################################################################################
+                    # --- Qubit drive ---
                     # For the first 16ns we play baked pulses exclusively. Loop the time idx counter until 16.
                     with if_(idx <= 16):
                         # Swich case to select the baked pulse with duration idx ns
@@ -212,6 +214,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     # Wait for the idle time set slightly above the maximum flux pulse duration
                     # to ensure that the 2nd x90 pulse arrives after the longest flux pulse
 
+                    # --- Readout ---
                     # Measure resonator state after the sequence
                     align()
 
@@ -221,7 +224,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     if node.parameters.use_state_discrimination:
                         assign(state[0], Cast.to_int(I[0] > qubit.resonator.operations["readout"].threshold))
                         save(state[0], state_st[0])
-                    qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                    qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
                 align()
         with stream_processing():

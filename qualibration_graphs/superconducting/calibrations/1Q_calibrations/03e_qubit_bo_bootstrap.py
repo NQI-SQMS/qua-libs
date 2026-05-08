@@ -138,15 +138,18 @@ def _build_time_rabi_program(qubit, t_arr_clk_cycles: np.ndarray, num_shots: int
             save(n, n_st)
 
             with for_each_(t, t_arr_clk_cycles.tolist()):
+                # --- Reset ---
                 qubit.reset("thermal")
                 align()
 
+                # --- Qubit drive ---
                 qubit.xy.play(
                     node.parameters.pulse_operation,
                     duration=t,   # QUA int variable, OPX clock cycles (4 ns each)
                 )
                 align()
 
+                # --- Readout ---
                 qubit.resonator.measure("readout", qua_vars=(I, Q))
                 save(I, I_st)
                 save(Q, Q_st)
@@ -325,12 +328,17 @@ def _ramsey_sanity_check(
         with for_(n, 0, n < params.ramsey_sanity_num_shots, n + 1):
             save(n, n_st)
             with for_each_(t, t_arr_clk.tolist()):
+                # --- Reset ---
                 qubit.reset("thermal")
                 align()
+
+                # --- Qubit drive ---
                 qubit.xy.play("x90")       # π/2 pulse
                 wait(t)
                 qubit.xy.play("x90")       # π/2 pulse
                 align()
+
+                # --- Readout ---
                 qubit.resonator.measure("readout", qua_vars=(I, Q))
                 save(I, I_st)
                 wait(qubit.resonator.depletion_time // 4 + 4)

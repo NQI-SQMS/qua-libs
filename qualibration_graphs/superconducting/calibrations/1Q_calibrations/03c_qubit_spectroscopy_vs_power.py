@@ -510,19 +510,43 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             x180_power_dbm = node.results["fit_results"][q.name].get("x180_power_dbm", float("nan"))
 
             if np.isfinite(x180_power_dbm):
-                # Step 1: set x180 → determines the Octave gain.
-                new_power_settings = q.xy.set_output_power(
-                    power_in_dbm=x180_power_dbm,
-                    max_amplitude=node.parameters.max_amplitude_opx,
-                    operation="x180",
-                )
-                # Step 2: set saturation at selected_power using the gain
-                # already written to the channel by step 1.
-                q.xy.set_output_power(
-                    power_in_dbm=selected_power_dbm,
-                    gain=q.xy.frequency_converter_up.gain,
-                    operation=node.parameters.operation,
-                )
+                # Step 1: set x180 → determines the Octave/FEM gain.
+                # The extrapolated x180 power may exceed the hardware ceiling
+                # (e.g. 10 dBm on MW-FEM channels).  Fall back to max_power_dbm
+                # if set_output_power rejects the value.
+                try:
+                    new_power_settings = q.xy.set_output_power(
+                        power_in_dbm=x180_power_dbm,
+                        max_amplitude=node.parameters.max_amplitude_opx,
+                        operation="x180",
+                    )
+                except ValueError:
+                    node.log(
+                        f"[{q.name}] x180 power {x180_power_dbm:.1f} dBm exceeds hardware "
+                        f"limit; clamping to max_power_dbm = {node.parameters.max_power_dbm:.1f} dBm"
+                    )
+                    x180_power_dbm = node.parameters.max_power_dbm
+                    new_power_settings = q.xy.set_output_power(
+                        power_in_dbm=x180_power_dbm,
+                        max_amplitude=node.parameters.max_amplitude_opx,
+                        operation="x180",
+                    )
+                # Step 2: set saturation at selected_power using the same
+                # gain/full_scale_power already written to the channel by step 1.
+                if hasattr(q.xy, "frequency_converter_up"):
+                    # IQ + Octave (OPX+): lock the Octave gain
+                    q.xy.set_output_power(
+                        power_in_dbm=selected_power_dbm,
+                        gain=q.xy.frequency_converter_up.gain,
+                        operation=node.parameters.operation,
+                    )
+                else:
+                    # MW-FEM (OPX1000): lock the full_scale_power_dbm
+                    q.xy.set_output_power(
+                        power_in_dbm=selected_power_dbm,
+                        full_scale_power_dbm=q.xy.opx_output.full_scale_power_dbm,
+                        operation=node.parameters.operation,
+                    )
                 power_source = "x180 from broadening fit; saturation at selected power"
                 drive_power_dbm = x180_power_dbm  # used for logging / temp_data
             else:
@@ -571,7 +595,8 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 f"  CORRECTIVE ACTION: RESET_ADAPTIVE_PARAMS\n"
                 f"  Updated state:\n"
                 f"    Drive power       = {drive_power_dbm:.2f} dBm  ({power_source})\n"
-                f"    Octave gain       = {new_power_settings['gain']:.2f} dB  (saved to temp_calibration)\n"
+                f"    Octave/FEM power  = {new_power_settings.get('gain', new_power_settings.get('full_scale_power_dbm', float('nan'))):.2f}"
+                f"  {'dB gain' if 'gain' in new_power_settings else 'dBm full-scale'}  (saved to temp_calibration)\n"
                 f"    Pulse amplitude   = {new_power_settings['amplitude']:.4f}\n"
                 f"    Qubit frequency   = {selected_freq / 1e9:.6f} GHz\n"
                 f"    x180/sat power    = {x180_str}"

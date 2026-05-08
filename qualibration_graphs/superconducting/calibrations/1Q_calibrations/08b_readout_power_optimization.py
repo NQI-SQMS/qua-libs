@@ -100,33 +100,35 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 # ground iq blobs for all qubits
                 save(n, n_st)
                 with for_(*from_array(a, amps)):
-                    # Qubit initialization
+                    # --- Reset ---
                     for i, qubit in multiplexed_qubits.items():
                         qubit.reset(node.parameters.reset_type, node.parameters.simulate)
                     align()
-                    # Qubit readout
+
+                    # --- Readout (|g> state) ---
                     for i, qubit in multiplexed_qubits.items():
                         # Measure the state of the resonators
                         qubit.resonator.measure("readout", qua_vars=(Ig[i], Qg[i]), amplitude_scale=a)
                         # save data to their respective streams
                         save(Ig[i], Ig_st[i])
                         save(Qg[i], Qg_st[i])
-
-                    # Qubit initialization
-                    for i, qubit in multiplexed_qubits.items():
-                        qubit.reset(node.parameters.reset_type, node.parameters.simulate)
                     align()
-                    # Qubit readout
+
+                    # --- Qubit drive ---
                     for i, qubit in multiplexed_qubits.items():
                         # Play the x180 gate to put the qubits in the excited state
                         qubit.xy.play("x180")
                         # Align the elements to measure after playing the qubit pulses.
                         qubit.align()
+
+                    # --- Readout (|e> state) ---
+                    for i, qubit in multiplexed_qubits.items():
                         # Measure the state of the resonators
                         qubit.resonator.measure("readout", qua_vars=(Ie[i], Qe[i]), amplitude_scale=a)
                         # save data to their respective streams
                         save(Ie[i], Ie_st[i])
                         save(Qe[i], Qe_st[i])
+                    align()
 
         with stream_processing():
             n_st.save("n")

@@ -9,7 +9,6 @@ from qm.qua import *
 from qualang_tools.loops import from_array
 from qualang_tools.multi_user import qm_session
 from qualang_tools.results import progress_counter
-from qualang_tools.units import unit
 
 from qualibrate import QualibrationNode
 from quam_config import Quam
@@ -74,8 +73,7 @@ node.machine = Quam.load()
 def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     """Create the sweep axes and generate the QUA program from the pulse sequence and the node parameters."""
     # Class containing tools to help handle units and conversions.
-    u = unit(coerce_to_integer=True)
-    # Get the active qubits from the node and organize them by batches
+# Get the active qubits from the node and organize them by batches
     node.namespace["qubits"] = qubits = get_qubits(node)
     num_qubits = len(qubits)
     # Update the readout power to match the desired range, this change will be reverted at the end of the node.
@@ -120,11 +118,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 save(n, n_st)
                 with for_(*from_array(npi, N_pi_vec)):
                     with for_(*from_array(a, amps)):
-                        # Qubit initialization
+                        # --- Reset ---
                         for i, qubit in multiplexed_qubits.items():
                             qubit.reset(node.parameters.reset_type, node.parameters.simulate)
                         align()
-                        # Qubit manipulation
+
+                        # --- Qubit drive ---
                         for i, qubit in multiplexed_qubits.items():
                             # Loop for error amplification (perform many qubit pulses)
                             count = declare(int)  # QUA variable for counting the qubit pulses
@@ -157,6 +156,8 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                     )
 
                         align()
+
+                        # --- Readout ---
                         for i, qubit in multiplexed_qubits.items():
                             qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                             save(I[i], I_st[i])
@@ -164,7 +165,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             if node.parameters.use_state_discrimination:
                                 assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
                         align()
         with stream_processing():

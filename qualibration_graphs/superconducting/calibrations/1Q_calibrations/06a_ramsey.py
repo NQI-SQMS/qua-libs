@@ -125,12 +125,16 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                 with for_each_(idle_time, idle_times):
                     with for_(*from_array(detuning_sign, detuning_signs)):
-                        # Qubit initialization
+                        # --- State initialization ---
                         for i, qubit in multiplexed_qubits.items():
                             reset_frame(qubit.xy.name)
+
+                        # --- Reset ---
+                        for i, qubit in multiplexed_qubits.items():
                             qubit.reset(node.parameters.reset_type, node.parameters.simulate)
                         align()
-                        # Qubit manipulation
+
+                        # --- Qubit drive ---
                         for i, qubit in multiplexed_qubits.items():
                             with if_(detuning_sign == 1):
                                 assign(
@@ -150,6 +154,8 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             qubit.xy.play(x180_op, amplitude_scale=0.5)
 
                         align()
+
+                        # --- Readout ---
                         for i, qubit in multiplexed_qubits.items():
                             qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                             save(I[i], I_st[i])
@@ -157,7 +163,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             if node.parameters.use_state_discrimination:
                                 assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                         align()
 
             # Restore element IF to nominal value after all averages

@@ -7,7 +7,6 @@ import numpy as np
 from qm.qua import *
 
 from qualang_tools.multi_user import qm_session
-from qualang_tools.units import unit
 from qualang_tools.results import progress_counter
 
 from qualibrate import QualibrationNode
@@ -68,8 +67,7 @@ node.machine = Quam.load()
 # %% {Create_QUA_program}
 @node.run_action(skip_if=node.parameters.load_data_id is not None)
 def create_qua_program(node: QualibrationNode[Parameters, Quam]):
-    u = unit(coerce_to_integer=True)
-    node.namespace["qubits"] = qubits = get_qubits(node)
+node.namespace["qubits"] = qubits = get_qubits(node)
     num_qubits = len(qubits)
 
     n_avg = node.parameters.num_shots
@@ -126,10 +124,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
 
-                # --- Ground state measurement ---
-                for i, qubit in multiplexed_qubits.items():
-                    qubit.reset(node.parameters.reset_type, node.parameters.simulate)
-                align()
+                # --- Readout (|g> state) ---
                 for i, qubit in multiplexed_qubits.items():
                     measure(
                         readout_op,
@@ -145,15 +140,20 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         save(I_g[i][ind], Ig_st[i])
                         assign(Q_g[i][ind], QQ_g[i][ind] + QI_g[i][ind])
                         save(Q_g[i][ind], Qg_st[i])
-                    qubit.resonator.wait(qubit.thermalization_time * u.ns // 4)
+                    qubit.resonator.wait(qubit.thermalization_time // 4)
 
-                # --- Excited state measurement ---
+                # --- Reset ---
                 for i, qubit in multiplexed_qubits.items():
                     qubit.reset(node.parameters.reset_type, node.parameters.simulate)
                 align()
+
+                # --- Qubit drive (|e> state preparation) ---
                 for i, qubit in multiplexed_qubits.items():
                     qubit.xy.play("x180")
                     qubit.align()
+
+                # --- Readout (|e> state) ---
+                for i, qubit in multiplexed_qubits.items():
                     measure(
                         readout_op,
                         qubit.resonator.name,
@@ -168,7 +168,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         save(I_e[i][ind], Ie_st[i])
                         assign(Q_e[i][ind], QQ_e[i][ind] + QI_e[i][ind])
                         save(Q_e[i][ind], Qe_st[i])
-                    qubit.resonator.wait(qubit.thermalization_time * u.ns // 4)
+                    qubit.resonator.wait(qubit.thermalization_time // 4)
+
+                align()
 
         with stream_processing():
             n_st.save("n")

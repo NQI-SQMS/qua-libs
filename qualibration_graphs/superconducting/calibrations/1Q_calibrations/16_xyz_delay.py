@@ -15,7 +15,6 @@ from calibration_utils.xyx_delay import (
 from qm.qua import *
 from qualang_tools.multi_user import qm_session
 from qualang_tools.results import progress_counter
-from qualang_tools.units import unit
 from qualibrate import QualibrationNode
 from qualibration_libs.data import XarrayDataFetcher
 from qualibration_libs.parameters import get_qubits
@@ -71,7 +70,6 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     node parameters.
     """
     # Class containing tools to help handling units and conversions.
-    u = unit(coerce_to_integer=True)
     # Get the config from the machine
     node.namespace["qubits"] = qubits = get_qubits(
         node
@@ -143,35 +141,40 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     # --- Relative delay scan loop (index over baked XY+Z aligned segments)
                     with for_(segment, 0, segment < number_of_segments, segment + 1):
 
-                        # 1. Reset qubits to ground state
                         for i, qubit in multiplexed_qubits.items():
+                            # --- Reset ---
                             qubit.reset(node.parameters.reset_type, node.parameters.simulate)
                             qubit.align()
 
-                            # 2. State preparation: excited (x180) or ground (wait same duration)
+                            # --- State initialization ---
+                            # State preparation: excited (x180) or ground (wait same duration)
                             if init_state == "e":
                                 qubit.xy.play("x180")
                             elif init_state == "g":
                                 qubit.xy.wait(qubit.xy.operations["x180"].length)
 
                             qubit.align()
-                            # 3. Optional coarse pre-wait (accounts for leading padding before fine scan)
+
+                            # --- Qubit drive ---
+                            # Optional coarse pre-wait (accounts for leading padding before fine scan)
                             qubit.wait(node.parameters.zeros_before_after_pulse // 4)
-                            # 4. Apply baked XY+Z segment with specific relative shift
+                            # Apply baked XY+Z segment with specific relative shift
                             with switch_(segment):
                                 for j in range(0, number_of_segments):
                                     with case_(j):
                                         delay_segments[qubit.xy.name][j].run()
 
                             qubit.align()
-                            # 5. Measurement (state discrimination or I/Q acquisition)
+
+                            # --- Readout ---
+                            # Measurement (state discrimination or I/Q acquisition)
                             qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                             save(I[i], I_st[i])
                             save(Q[i], Q_st[i])
                             if node.parameters.use_state_discrimination:
                                 assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
                         align()
             align()  # Final alignment after batch completes

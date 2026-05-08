@@ -120,20 +120,24 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 save(n, n_st)
                 with for_(*from_array(df, dfs)):
                     with for_(*from_array(t, pulse_durations // 4)):
-                        # Qubit initialization
+                        # --- Reset ---
                         for i, qubit in multiplexed_qubits.items():
                             # Set the xy drive frequency back to the qubit frequency for active reset
                             qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
                             qubit.reset(node.parameters.reset_type, node.parameters.simulate)
-                            # Update the xy drive frequency
+                        align()
+
+                        # --- Frequency detuning ---
+                        for i, qubit in multiplexed_qubits.items():
                             qubit.xy.update_frequency(df + qubit.xy.intermediate_frequency)
                         align()
-                        # Qubit manipulation
+
+                        # --- Qubit drive ---
                         for i, qubit in multiplexed_qubits.items():
                             qubit.xy.play("x180", duration=t)
                         align()
 
-                        # Qubit readout
+                        # --- Readout ---
                         for i, qubit in multiplexed_qubits.items():
                             qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                             save(I[i], I_st[i])
@@ -141,7 +145,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             if state_discrimination:
                                 assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                         align()
 
         with stream_processing():

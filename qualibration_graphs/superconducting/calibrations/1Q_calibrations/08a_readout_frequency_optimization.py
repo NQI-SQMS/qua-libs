@@ -106,14 +106,17 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
                 with for_(*from_array(df, dfs)):
-                    # Qubit initialization
+                    # --- Frequency detuning ---
                     for i, qubit in multiplexed_qubits.items():
-                        # Update the resonator frequencies & reset the qubits
+                        # Update the resonator frequencies
                         update_frequency(qubit.resonator.name, df + qubit.resonator.intermediate_frequency)
+
+                    # --- Reset ---
+                    for i, qubit in multiplexed_qubits.items():
                         qubit.reset(node.parameters.reset_type, node.parameters.simulate)
                     align()
 
-                    # Qubit readout - |g> state
+                    # --- Readout (|g> state) ---
                     for i, qubit in multiplexed_qubits.items():
                         # Measure the state of the resonators
                         qubit.resonator.measure("readout", qua_vars=(I_g[i], Q_g[i]))
@@ -122,21 +125,21 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         save(Q_g[i], Q_g_st[i])
                     align()
 
-                    # Qubit initialization
-                    for i, qubit in multiplexed_qubits.items():
-                        qubit.reset(node.parameters.reset_type, node.parameters.simulate)
-                    align()
-                    # Qubit readout - |e> state
+                    # --- Qubit drive ---
                     for i, qubit in multiplexed_qubits.items():
                         # Play the x180 gate to put the qubits in the excited state
                         qubit.xy.play("x180")
                         # Align the elements to measure after playing the qubit pulses.
                         qubit.align()
+
+                    # --- Readout (|e> state) ---
+                    for i, qubit in multiplexed_qubits.items():
                         # Measure the state of the resonators
                         qubit.resonator.measure("readout", qua_vars=(I_e[i], Q_e[i]))
                         # save data to their respective streams
                         save(I_e[i], I_e_st[i])
                         save(Q_e[i], Q_e_st[i])
+                    align()
 
         with stream_processing():
             n_st.save("n")

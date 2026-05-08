@@ -6,7 +6,6 @@ import xarray as xr
 from qm.qua import *
 
 from qualang_tools.multi_user import qm_session
-from qualang_tools.units import unit
 
 from qualibrate import QualibrationNode
 from quam_config import Quam
@@ -66,7 +65,6 @@ node.machine = Quam.load()
 @node.run_action(skip_if=node.parameters.load_data_id is not None)
 def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     """Create the QUA program for a single T1 sweep (identical to node 05_T1)."""
-    u = unit(coerce_to_integer=True)
     node.namespace["qubits"] = qubits = get_qubits(node)
     num_qubits = len(qubits)
     n_avg = node.parameters.num_shots
@@ -93,19 +91,23 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
                 with for_each_(t, idle_times):
+                    # --- Reset ---
                     for i, qubit in multiplexed_qubits.items():
                         qubit.reset(
                             node.parameters.reset_type,
                             node.parameters.simulate,
                             log_callable=node.log,
                         )
+                    align()
 
+                    # --- Qubit drive ---
                     for i, qubit in multiplexed_qubits.items():
                         qubit.align()
                         qubit.xy.play("x180")
                         qubit.align()
                         qubit.resonator.wait(t)
 
+                    # --- Readout ---
                     for i, qubit in multiplexed_qubits.items():
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                         save(I[i], I_st[i])
@@ -113,7 +115,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         if node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
                     align()
         with stream_processing():
