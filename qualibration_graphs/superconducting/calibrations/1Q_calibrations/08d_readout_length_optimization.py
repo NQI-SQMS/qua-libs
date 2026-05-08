@@ -67,7 +67,7 @@ node.machine = Quam.load()
 # %% {Create_QUA_program}
 @node.run_action(skip_if=node.parameters.load_data_id is not None)
 def create_qua_program(node: QualibrationNode[Parameters, Quam]):
-node.namespace["qubits"] = qubits = get_qubits(node)
+    node.namespace["qubits"] = qubits = get_qubits(node)
     num_qubits = len(qubits)
 
     n_avg = node.parameters.num_shots
@@ -124,6 +124,11 @@ node.namespace["qubits"] = qubits = get_qubits(node)
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
 
+                # --- Reset ---
+                for i, qubit in multiplexed_qubits.items():
+                    qubit.reset(node.parameters.reset_type, node.parameters.simulate)
+                align()
+
                 # --- Readout (|g> state) ---
                 for i, qubit in multiplexed_qubits.items():
                     measure(
@@ -142,9 +147,6 @@ node.namespace["qubits"] = qubits = get_qubits(node)
                         save(Q_g[i][ind], Qg_st[i])
                     qubit.resonator.wait(qubit.thermalization_time // 4)
 
-                # --- Reset ---
-                for i, qubit in multiplexed_qubits.items():
-                    qubit.reset(node.parameters.reset_type, node.parameters.simulate)
                 align()
 
                 # --- Qubit drive (|e> state preparation) ---

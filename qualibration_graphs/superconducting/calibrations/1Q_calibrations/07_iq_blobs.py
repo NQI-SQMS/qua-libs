@@ -105,6 +105,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             with for_(n, 0, n < n_runs, n + 1):
                 save(n, n_st)
 
+                # --- Reset ---
+                for i, qubit in multiplexed_qubits.items():
+                    qubit.reset(node.parameters.reset_type, node.parameters.simulate)
+                align()
+
                 # Ground state iq blobs for all qubits
                 # --- Readout (|g> state) ---
                 for i, qubit in multiplexed_qubits.items():
@@ -115,11 +120,6 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     # save data to their respective streams
                     save(I_g[i], I_g_st[i])
                     save(Q_g[i], Q_g_st[i])
-                align()
-
-                # --- Reset ---
-                for i, qubit in multiplexed_qubits.items():
-                    qubit.reset(node.parameters.reset_type, node.parameters.simulate)
                 align()
 
                 # Excited state iq blobs for all qubits
