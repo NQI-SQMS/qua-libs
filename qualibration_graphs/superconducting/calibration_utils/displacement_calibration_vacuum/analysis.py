@@ -59,10 +59,119 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
 
 
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
-    if not node.parameters.use_state_discrimination:
-        ds = convert_IQ_to_V(ds, node.namespace["qubits"])
+    """Convert raw IQ streams to physical units, subtract the cross-Kerr baseline,
+    and optionally derive a vacuum-population probability for state discrimination.
+
+    Two modes are supported, selected by node.parameters.subtract_baseline:
+
+    subtract_baseline = True  (dual-sequence, cross-Kerr correction)
+    ----------------------------------------------------------------
+    The QUA program acquires two independent sub-sequences per amplitude point:
+      * Signal   (I, Q)   — cavity displaced + qubit π-pulse.
+      * Baseline (Ib, Qb) — cavity displaced + NO qubit π-pulse.
+
+    Step 1 — Convert to Volts
+        Apply (×2^12 / readout_length) to I, Q, Ib, Qb so they share the same scale.
+
+    Step 2 — Baseline subtraction  (IQ domain, BEFORE any threshold)
+        I_corr(a) = I(a) − Ib(a)  ≈  P_vacuum(a) · (I_e − I_g)
+        Q_corr(a) = Q(a) − Qb(a)
+        Removes the amplitude-dependent cross-Kerr resonator offset.
+
+    Step 3 — State discrimination  (optional, applied to I_corr)
+        If use_state_discrimination is True, I_corr is normalised per-qubit to
+        [0, 1] using the peak value at the smallest |amplitude| points as the
+        reference (≈ I_e − I_g), giving a continuous P_vacuum estimate.
+        A hard binary threshold is NOT used here because thresholding and
+        averaging do not commute: applying I_corr > thr to the *averaged* I_corr
+        (one float per point) would yield a step function, not a smooth Gaussian.
+        The resulting 'state' variable is passed to the confusion-matrix correction.
+
+    subtract_baseline = False  (original single-sequence)
+    -------------------------------------------------------
+    The QUA program runs only the signal sequence.  When use_state_discrimination
+    is True, the binary state was computed per-shot in QUA (average of 0/1 outcomes
+    = proper probability) and is already present as 'state' in the dataset.
+    When use_state_discrimination is False, I is converted to Volts and used
+    directly.  This path exactly reproduces the original node behaviour.
+    """
+    qubits = node.namespace["qubits"]
+
+    # -----------------------------------------------------------------------
+    # PATH A — dual-sequence with cross-Kerr baseline subtraction
+    # -----------------------------------------------------------------------
+    if node.parameters.subtract_baseline:
+        # Step 1: Convert all four quadrature streams to Volts.
+        # The same readout-length normalisation applies to both signal (I, Q) and
+        # baseline (Ib, Qb) because they use the same readout operation.
+        ds = convert_IQ_to_V(ds, qubits, IQ_list=["I", "Q", "Ib", "Qb"])
+
+        # Step 2: Baseline subtraction in the IQ plane.
+        # Ib(a) ≈ cross-Kerr shift(a) + I_g  (qubit in |g⟩, no π-pulse).
+        # I(a)  = cross-Kerr shift(a) + P_vac(a)·I_e + (1−P_vac(a))·I_g.
+        # I_corr = I − Ib  ≈  P_vac(a) · (I_e − I_g).
+        # ds["Ib"] and ds["Qb"] are retained for diagnostics but not used further.
+        ds = ds.assign(
+            I=ds["I"] - ds["Ib"],   # cross-Kerr-corrected in-phase quadrature
+            Q=ds["Q"] - ds["Qb"],   # cross-Kerr-corrected quadrature (informational)
+        )
+
+        # Step 3: Optional state discrimination on the baseline-corrected I.
+        if node.parameters.use_state_discrimination:
+            state_arrays = []
+            amp_values = ds["amp"].values
+
+            for q in qubits:
+                I_q = ds["I"].sel(qubit=q.name)
+
+                # Estimate the peak (≈ I_e − I_g) from the points closest to a = 0
+                # (smallest |amplitude|), where P_vacuum ≈ 1 and the qubit is most
+                # likely to be flipped.  Average the bottom 10 % (≥ 1 point) to
+                # reduce noise on the estimate.
+                n_peak = max(1, len(amp_values) // 10)
+                peak_idx = np.argsort(np.abs(amp_values))[:n_peak]
+                peak = float(I_q.values[peak_idx].mean())
+
+                if abs(peak) < 1e-9:
+                    # Degenerate / no-signal case: keep raw I_corr so the fit still
+                    # has a finite signal to work with.
+                    state_q = xr.DataArray(
+                        I_q.values.copy(), coords=I_q.coords, dims=I_q.dims,
+                    )
+                else:
+                    # Normalise I_corr to [0, 1]  ≈  P_vacuum(a).
+                    # Clip to [0, 1] to keep the probability physically meaningful
+                    # in the presence of noise or imperfect baseline cancellation.
+                    state_q = xr.DataArray(
+                        np.clip(I_q.values / peak, 0.0, 1.0),
+                        coords=I_q.coords,
+                        dims=I_q.dims,
+                    )
+
+                state_arrays.append(state_q)
+
+            # Stack per-qubit arrays back along the qubit dimension.
+            state = xr.concat(state_arrays, dim="qubit").assign_coords(qubit=ds.qubit)
+            ds = ds.assign(state=state)
+
+            # Apply confusion-matrix correction.
+            # P_true = (P_meas − ge) / (ee − ge) is linear in P_meas and applies
+            # equally well to the continuous probability estimate above.
+            ds = apply_confusion_correction_to_dataset(ds, node)
+
+    # -----------------------------------------------------------------------
+    # PATH B — original single-sequence (no baseline subtraction)
+    # -----------------------------------------------------------------------
     else:
-        ds = apply_confusion_correction_to_dataset(ds, node)
+        if node.parameters.use_state_discrimination:
+            # 'state' was computed per-shot in QUA (average of 0/1 binary outcomes)
+            # and is already present in the dataset as a proper probability.
+            # Apply confusion-matrix correction directly.
+            ds = apply_confusion_correction_to_dataset(ds, node)
+        else:
+            # No state discrimination: convert raw I/Q to Volts for fitting.
+            ds = convert_IQ_to_V(ds, qubits)
+
     return ds
 
 
@@ -100,6 +209,13 @@ def fit_raw_data(
 
     Returns the dataset (unchanged) and a dict of FitParameters per qubit.
     """
+    # Choose the fit signal:
+    #   'state' — normalised P_vacuum ∈ [0, 1], produced by process_raw_dataset
+    #             when use_state_discrimination=True (confusion-corrected).
+    #   'I'     — baseline-corrected I quadrature in Volts (continuous signal).
+    # In both cases the variable follows the Gaussian model
+    #   f(a) = amplitude · exp(-(a/sigma)²) + offset
+    # and yields the same sigma; only the amplitude scale differs.
     signal_name = "state" if node.parameters.use_state_discrimination else "I"
     fit_results: Dict[str, FitParameters] = {}
 

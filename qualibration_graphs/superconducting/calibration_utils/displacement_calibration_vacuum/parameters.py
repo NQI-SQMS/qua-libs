@@ -37,6 +37,13 @@ class NodeSpecificParameters(RunnableParameters):
     active_reset: bool = True
     """If True, apply D(-a) immediately after measurement to return the cavity
     toward vacuum, replacing passive thermalization for the next shot."""
+    subtract_baseline: bool = True
+    """If True, run a second sub-sequence WITHOUT the qubit π-pulse at every amplitude
+    point and subtract its averaged IQ from the signal IQ before any state-discrimination
+    threshold is applied.  This removes the amplitude-dependent IQ offset caused by
+    cross-Kerr coupling between the cavity mode and the readout resonator.
+    If False, only the standard single-sequence protocol (with π-pulse) is executed,
+    matching the original behaviour with no cross-Kerr correction."""
     use_state_discrimination: bool = True
     """True → measure qubit state (0/1). False → measure raw I quadrature."""
     normalize_plot: bool = False

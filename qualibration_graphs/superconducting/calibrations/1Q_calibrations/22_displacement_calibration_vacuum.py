@@ -31,29 +31,47 @@ logger = logging.getLogger(__name__)
 
 # %% {Node initialisation}
 description = """
-        DISPLACEMENT VACUUM-POPULATION CALIBRATION (35)
+        DISPLACEMENT VACUUM-POPULATION CALIBRATION (35) — dual-sequence with baseline
 
 Calibrates the unit displacement amplitude by sweeping the cavity displacement
 amplitude and measuring the vacuum-state population with a selective qubit π-pulse.
 
-Sequence (per displacement amplitude scale a):
-  1. Reset cavity (thermal or active sideband cooling) and qubit.
-  2. Apply displacement pulse at amplitude_scale = a.
-  3. Apply selective_x180 (or x180) on qubit — flips qubit only when cavity is in |0⟩.
-  4. Measure qubit state.
-  5. Apply D(-a) to return cavity toward vacuum (if active_reset = True).
+Because of cross-Kerr coupling between the cavity mode and the readout resonator, the
+resonator IQ response shifts as a function of displacement amplitude even when the qubit
+is untouched.  To remove this spurious baseline, each averaging iteration now runs TWO
+sub-sequences for every amplitude point:
 
-The measured signal:
-    P_e(a) = amplitude · exp(-(a / A_1ph)²) + offset
+  PART 1 — Baseline (no qubit π-pulse):
+    1a. Reset cavity + qubit.
+    1b. Displace cavity to |α = a · A_unit⟩.
+    1c. Measure readout IQ  →  I_base, Q_base  (cross-Kerr offset only).
+    1d. Apply D(-a) if active_reset = True.
 
-where A_1ph = sigma is the displacement amplitude_scale that produces exactly 1 photon
-on average (n̄ = 1 for a coherent state).
+  PART 2 — Signal (full protocol):
+    2a. Reset cavity + qubit (independent reset, same conditions as Part 1).
+    2b. Displace cavity identically.
+    2c. Apply selective_x180 (or x180) on qubit — flips qubit only when cavity is in |0⟩.
+    2d. Measure readout IQ  →  I, Q  (cross-Kerr offset + vacuum-population signal).
+    2e. Apply D(-a) if active_reset = True.
+
+Post-processing (in analysis.py, before state discrimination):
+    I_corr(a) = I(a) - I_base(a)    ≈  P_vacuum(a) · (I_e - I_g)
+    Q_corr(a) = Q(a) - Q_base(a)
+
+This subtraction is performed in the IQ (Volt) domain, BEFORE any threshold or
+state-discrimination logic is applied, so that the cross-Kerr offset does not bias
+the vacuum-population estimate.
+
+The measured signal after subtraction:
+    I_corr(a) = amplitude · exp(-(a / A_1ph)²) + offset
+
+where A_1ph = sigma is the amplitude_scale that produces exactly 1 photon on average.
 
 Parameters:
   - mode_name:       Cavity mode to calibrate ('alice' or 'bob').
   - qubit_pulse:     'selective_x180' (spectrally selective, recommended) or 'x180'.
   - amp_min/max:     Amplitude sweep range (amp_min=0 for half-Gaussian).
-  - active_reset:    Play D(-a) after measurement to speed up cavity thermalization.
+  - active_reset:    Play D(-a) after each sub-sequence to speed up thermalization.
 
 State updates:
   - cavity_mode.cavity_mode_drive.operations["displacement"].amplitude
@@ -138,14 +156,38 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         ),
     }
 
-    with program() as node.namespace["qua_program"]:
-        I, I_st, Q, Q_st, n, n_st = node.machine.declare_qua_variables()
-        a = declare(fixed)
-        a_neg = declare(fixed)
+    # Whether to run the dual-sequence baseline protocol is decided here at
+    # program-build time (Python if, not a QUA conditional) so that the compiled
+    # QUA program contains only the instructions that will actually be executed.
+    subtract_baseline = node.parameters.subtract_baseline
 
-        if node.parameters.use_state_discrimination:
+    with program() as node.namespace["qua_program"]:
+        # --- QUA variable declarations ---
+        # I/Q: signal sequence (with qubit π-pulse) — always present.
+        I, I_st, Q, Q_st, n, n_st = node.machine.declare_qua_variables()
+
+        # I_base/Q_base: baseline sequence (no π-pulse).
+        # Declared only when subtract_baseline=True; the compiled program will not
+        # contain any reference to these variables when the flag is False.
+        if subtract_baseline:
+            I_base = [declare(fixed) for _ in range(num_qubits)]   # baseline in-phase
+            Q_base = [declare(fixed) for _ in range(num_qubits)]   # baseline quadrature
+            I_base_st = [declare_stream() for _ in range(num_qubits)]
+            Q_base_st = [declare_stream() for _ in range(num_qubits)]
+            # When subtracting the baseline, state discrimination cannot be computed
+            # per-shot inside QUA: the threshold would have to be applied to
+            # (I_signal - I_baseline), but those come from separate shots and are
+            # only both available after averaging.  State discrimination is therefore
+            # deferred to Python (process_raw_dataset).
+
+        if not subtract_baseline and node.parameters.use_state_discrimination:
+            # Original single-sequence mode: compute the binary state per-shot inside
+            # QUA so that averaging gives a proper probability (not a thresholded mean).
             state = [declare(int) for _ in range(num_qubits)]
             state_st = [declare_stream() for _ in range(num_qubits)]
+
+        a = declare(fixed)      # current displacement amplitude scale
+        a_neg = declare(fixed)  # negated amplitude for the D(-a) active-reset pulse
 
         for multiplexed_qubits in qubits.batch():
             for qubit in multiplexed_qubits.values():
@@ -154,9 +196,78 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
                 with for_(*from_array(a, amp_array)):
-                    assign(a_neg, -a)
+                    assign(a_neg, -a)   # pre-compute negated amplitude once per point
 
-                    # --- Reset cavity and qubit BEFORE displacement ---
+                    # ============================================================
+                    # PART 1 — BASELINE measurement (only when subtract_baseline=True)
+                    # ============================================================
+                    # Purpose: capture the bare readout-resonator IQ response at each
+                    # displacement amplitude WITHOUT any qubit drive.  The cavity-
+                    # resonator cross-Kerr coupling shifts the resonator frequency
+                    # (and hence its IQ response) as a function of photon number, so
+                    # this baseline is amplitude-dependent and must be measured
+                    # independently rather than assumed to be a fixed offset.
+                    if subtract_baseline:
+                        # Reset the cavity to vacuum and the qubit to |g⟩ before the
+                        # baseline pulse sequence.
+                        sideband_drive = node.namespace["sideband_drive"]
+                        for i, qubit in multiplexed_qubits.items():
+                            cavity_mode.reset(
+                                node.parameters.cavity_reset_type,
+                                node.parameters.simulate,
+                                log_callable=node.log,
+                                sideband_drive=sideband_drive,
+                                qubit_thermalization_time=qubit.thermalization_time,
+                                fock_n=node.parameters.cavity_active_cooling_fock_n,
+                                f0g1_pulse_duration_ns=node.parameters.f0g1_pulse_duration_ns,
+                            )
+                            qubit.reset(
+                                node.parameters.reset_type,
+                                node.parameters.simulate,
+                                log_callable=node.log,
+                            )
+
+                        # Displace the cavity to the coherent state |α = a · A_unit⟩.
+                        # align() with no args synchronises ALL QUA elements (including
+                        # cavity_mode_drive, which is on a separate channel from xy/resonator).
+                        align()
+                        cavity_mode.cavity_mode_drive.play("displacement", amplitude_scale=a)
+
+                        # NO qubit π-pulse here — the qubit stays in |g⟩.
+                        # The readout captures only the cross-Kerr-induced IQ shift
+                        # from the displaced cavity, with no vacuum-population signal.
+
+                        # Measure the readout IQ for each qubit (baseline).
+                        # Align to the cavity drive channel first to ensure the
+                        # displacement pulse has finished before readout begins.
+                        for i, qubit in multiplexed_qubits.items():
+                            align(cavity_mode.cavity_mode_drive.name, qubit.resonator.name)
+                            qubit.resonator.measure("readout", qua_vars=(I_base[i], Q_base[i]))
+                            save(I_base[i], I_base_st[i])
+                            save(Q_base[i], Q_base_st[i])
+                            # Wait for the resonator ring-down before the next sequence.
+                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+
+                        # Optional D(-a): return the cavity toward vacuum to speed up
+                        # thermalization before the signal sequence.
+                        align()
+                        if node.parameters.active_reset:
+                            align()
+                            cavity_mode.cavity_mode_drive.play("displacement", amplitude_scale=a_neg)
+                        align()
+
+                    # ============================================================
+                    # PART 2 — SIGNAL measurement (full protocol, WITH π-pulse)
+                    # ============================================================
+                    # This block is always executed regardless of subtract_baseline.
+                    # When subtract_baseline=True it is preceded by Part 1 (above),
+                    # so it constitutes the second sub-sequence of the dual protocol.
+                    # When subtract_baseline=False it is the only sequence (original
+                    # single-sequence behaviour).
+
+                    # Reset the cavity and qubit.  When subtract_baseline=True this is
+                    # the second independent reset, ensuring the cross-Kerr environment
+                    # is the same as in the baseline sub-sequence.
                     sideband_drive = node.namespace["sideband_drive"]
                     for i, qubit in multiplexed_qubits.items():
                         cavity_mode.reset(
@@ -174,44 +285,65 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             log_callable=node.log,
                         )
 
-                    # --- Displace cavity ---
-                    # align() with no args synchronises all QUA elements including
-                    # cavity_mode_drive, which is separate from the qubit elements.
+                    # Displace the cavity (identical to Part 1 when subtract_baseline=True,
+                    # so the cross-Kerr offset seen by the resonator is the same in both
+                    # sub-sequences and cancels exactly upon subtraction).
                     align()
                     cavity_mode.cavity_mode_drive.play("displacement", amplitude_scale=a)
 
-                    # --- Probe vacuum population ---
-                    # selective_x180 flips the qubit only when cavity is in |0⟩.
-                    # x180 is a broadband π-pulse (use for comparison / if selective not calibrated).
+                    # Apply the qubit π-pulse AFTER the displacement.
+                    # selective_x180: spectrally narrow, flips the qubit only when the
+                    #   cavity is in |0⟩ (n=0 Fock state).
+                    # x180: broadband π-pulse, flips unconditionally (use for comparison
+                    #   or when selective_x180 is not yet calibrated).
                     for i, qubit in multiplexed_qubits.items():
                         align(cavity_mode.cavity_mode_drive.name, qubit.xy.name)
                         qubit.xy.play(node.parameters.qubit_pulse)
 
-                    # --- Measure ---
+                    # Measure the readout IQ for each qubit (signal).
                     for i, qubit in multiplexed_qubits.items():
                         align(qubit.xy.name, qubit.resonator.name)
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
-                        if node.parameters.use_state_discrimination:
+                        # Original single-sequence mode: apply the discrimination
+                        # threshold per-shot so that averaging gives a proper
+                        # probability estimate (average of binary outcomes).
+                        if not subtract_baseline and node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
                         qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
 
+                    # Optional active reset after the signal sequence.
                     align()
-                    # --- Active reset: D(-a) returns cavity toward vacuum ---
                     if node.parameters.active_reset:
                         align()
                         cavity_mode.cavity_mode_drive.play("displacement", amplitude_scale=a_neg)
-
                     align()
 
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
+                # Signal I/Q: always saved.
+                # Shape after buffering: (num_shots, num_amp_points) → average over
+                # shots → final shape (num_amp_points,).
                 I_st[i].buffer(len(amp_array)).average().save(f"I{i + 1}")
                 Q_st[i].buffer(len(amp_array)).average().save(f"Q{i + 1}")
-                if node.parameters.use_state_discrimination:
+
+                if subtract_baseline:
+                    # Baseline I/Q: saved only in dual-sequence mode.
+                    # Named Ib{i+1} / Qb{i+1} so that XarrayDataFetcher groups them
+                    # into dataset variables 'Ib' and 'Qb' (via the base-name regex),
+                    # stacked along the qubit axis exactly like 'I' and 'Q'.
+                    # process_raw_dataset subtracts these from I/Q in Volt space,
+                    # BEFORE any state-discrimination threshold is applied.
+                    I_base_st[i].buffer(len(amp_array)).average().save(f"Ib{i + 1}")
+                    Q_base_st[i].buffer(len(amp_array)).average().save(f"Qb{i + 1}")
+
+                elif node.parameters.use_state_discrimination:
+                    # Original single-sequence mode with per-shot state computation.
+                    # Averaging binary (0/1) outcomes gives a proper probability,
+                    # which is more accurate than thresholding the averaged I signal.
                     state_st[i].buffer(len(amp_array)).average().save(f"state{i + 1}")
 
 
