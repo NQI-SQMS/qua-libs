@@ -107,7 +107,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 with for_(*from_array(t, durations_cc)):
                     # Wait twice the thermalization time for proper |f> state reset
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
+                        qubit.xy.wait(2 * qubit.thermalization_time // 4)
                     align()
 
                     for i, qubit in multiplexed_qubits.items():
@@ -130,7 +130,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         if node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        qubit.resonator.wait(node.machine.depletion_time // 4)
                     align()
 
         with stream_processing():

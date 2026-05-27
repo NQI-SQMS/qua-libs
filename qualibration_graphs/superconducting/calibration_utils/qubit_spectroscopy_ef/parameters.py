@@ -23,10 +23,13 @@ class NodeSpecificParameters(RunnableParameters):
     """Whether to update the saturation pulse and x180/x90 pulse amplitudes based on the peak width. Default is False"""
     find_dip: bool = False
     """Set True for reflection readout where the qubit appears as a dip in I_rot (e.g. SRF setups)."""
+    signal_source: str = "I_rot"
+    """Signal used for analysis and plotting: 'I_rot' (PCA-rotated quadrature), 'I' (raw I quadrature,
+    no rotation), or 'IQ_abs' (magnitude). When 'IQ_abs' or 'I' is chosen the integration weight
+    angle is NOT updated (use 'I' when the angle was already calibrated by a previous node)."""
     update_integration_weights_angle: bool = True
-    """When True (default), update the readout integration weight angle from the IQ rotation fit.
-    Set to False to keep the existing angle unchanged (useful when the ge readout is already
-    well-calibrated and you do not want the ef spectroscopy to overwrite it)."""
+    """When False, skip updating integration_weights_angle in update_state even when signal_source='I_rot'.
+    Set False when the ge readout is already well-calibrated and you do not want the ef spectroscopy to overwrite it."""
 
 
 class Parameters(

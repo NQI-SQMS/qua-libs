@@ -105,6 +105,8 @@ def fit_raw_data(ds: xr.Dataset, node: QualibrationNode) -> Tuple[xr.Dataset, di
     # Select the signal passed to peaks_dips
     if signal_source == "IQ_abs":
         signal_for_fit = ds_fit.IQ_abs
+    elif signal_source == "I":
+        signal_for_fit = -ds_fit.I if is_dip else ds_fit.I
     elif is_dip:
         signal_for_fit = -ds_fit.I_rot
     else:
@@ -136,8 +138,8 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
     prev_angles = np.array(
         [q.resonator.operations["readout"].integration_weights_angle for q in node.namespace["qubits"]]
     )
-    if signal_source == "IQ_abs":
-        # IQ_abs gives no phase information — keep the existing angle unchanged.
+    if signal_source in ("IQ_abs", "I"):
+        # IQ_abs and I give no new phase information — keep the existing angle unchanged.
         fit = fit.assign({"iw_angle": ("qubit", prev_angles)})
     else:
         fit = fit.assign({"iw_angle": (prev_angles + fit.iw_angle) % (2 * np.pi)})
@@ -160,6 +162,8 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
     is_dip = getattr(node.parameters, "find_dip", False)
     if signal_source == "IQ_abs":
         signal_for_chi2 = fit.IQ_abs
+    elif signal_source == "I":
+        signal_for_chi2 = -fit.I if is_dip else fit.I
     elif is_dip:
         signal_for_chi2 = -fit.I_rot
     else:

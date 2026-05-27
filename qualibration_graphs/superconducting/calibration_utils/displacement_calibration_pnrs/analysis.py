@@ -2,7 +2,7 @@
 
 Experiment:
   For each displacement amplitude A, a qubit spectroscopy scan is performed.
-  The resulting spectrum contains peaks at frequencies ω_q - 2χ·n (n=0,1,2,...),
+  The resulting spectrum contains peaks at frequencies ω_q + chi·n (n=0,1,2,...),
   with amplitudes proportional to the Poisson photon-number distribution P(n).
 
 Procedure:
@@ -10,10 +10,11 @@ Procedure:
   2. Compute n̄ = Σ n·P(n) from fitted distribution.
   3. Fit n̄(A) = k·A² to obtain calibration constant k.
   4. A₁ph = 1/√k is the displacement amplitude that deposits exactly 1 photon on average.
-  5. chi_hz = peak_spacing / 2 = χ/(2π) [Hz] is the Hamiltonian coupling constant,
-     averaged across all amplitudes where peaks are visible.
+  5. chi_hz = -(peak_spacing) [Hz] is the full per-photon qubit frequency shift,
+     stored negative, averaged across all amplitudes where peaks are visible.
 
-Convention: chi = χ/(2π) [Hz] in H/ħ = χ a†a σz.  Peak spacing = 2*chi.
+Convention: chi [Hz] is the full per-photon qubit frequency shift, stored with its
+physical sign.  For typical transmon-cavity systems chi < 0 and |chi| = PNRS peak spacing.
 
 State updates:
   - cavity_mode.cavity_mode_drive.operations["displacement"].amplitude = amp_for_one_photon
@@ -45,7 +46,8 @@ class FitParameters:
     amp_for_one_photon: float
     """Displacement amplitude_scale that deposits exactly 1 photon on average: 1/√k."""
     chi_hz: float
-    """Mean peak spacing 2χ [Hz], averaged over amplitudes with visible peaks."""
+    """Full per-photon qubit frequency shift [Hz], stored negative.
+    |chi_hz| = PNRS peak spacing, averaged over amplitudes with visible peaks."""
     nbar_vs_amp: List[Tuple[float, float]]
     """Raw calibration pairs [(A, n̄), ...] before fitting."""
     num_peaks_used: int
@@ -177,7 +179,7 @@ def _extract_nbar_and_chi(popt: np.ndarray, n_peaks: int) -> Tuple[float, float]
     positions_sorted = np.sort(positions)
     if len(positions_sorted) >= 2:
         spacings = np.diff(positions_sorted)
-        chi_hz = float(np.mean(spacings)) / 2.0  # peak_spacing/2 = χ/(2π)
+        chi_hz = -float(np.mean(spacings))  # full per-photon shift, negative
     else:
         chi_hz = float("nan")
 
@@ -221,7 +223,7 @@ def fit_raw_data(
             if np.isfinite(nbar):
                 nbar_list.append((float(A), float(nbar)))
                 peaks_per_amp.append(n_detected)
-            if np.isfinite(chi_hz) and chi_hz > 0:
+            if np.isfinite(chi_hz) and chi_hz < 0:
                 chi_list.append(chi_hz)
 
         mean_chi = float(np.mean(chi_list)) if chi_list else float("nan")

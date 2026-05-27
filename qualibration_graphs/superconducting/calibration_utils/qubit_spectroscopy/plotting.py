@@ -47,7 +47,7 @@ def plot_raw_data_with_fit(
             find_dip=find_dip, signal_source=signal_source,
         )
 
-    signal_label = "IQ_abs" if signal_source == "IQ_abs" else "I_rot"
+    signal_label = {"IQ_abs": "IQ_abs", "I": "I"}.get(signal_source, "I_rot")
     grid.fig.suptitle(f"Qubit spectroscopy ({signal_label} + fit)")
     grid.fig.set_size_inches(15, 9)
     grid.fig.tight_layout()
@@ -82,11 +82,16 @@ def plot_individual_data_with_fit(
         'I_rot' (default) or 'IQ_abs' — selects which variable to plot.
     """
     use_iq_abs = (signal_source == "IQ_abs")
-    # When find_dip=True, signal_for_fit = -I_rot. Display -I_rot so the plot
+    use_raw_I = (signal_source == "I")
+    # When find_dip=True, signal_for_fit = -I_rot (or -I). Display negated so the plot
     # shows a peak (consistent with spec_vs_power) and the Lorentzian overlay aligns.
     negate = find_dip and not use_iq_abs
-    plot_var = "IQ_abs" if use_iq_abs else "I_rot"
-    ylabel   = "IQ_abs [mV]" if use_iq_abs else ("-I_rot [mV]" if negate else "I_rot [mV]")
+    if use_iq_abs:
+        plot_var, ylabel = "IQ_abs", "IQ_abs [mV]"
+    elif use_raw_I:
+        plot_var, ylabel = "I", ("-I [mV]" if negate else "I [mV]")
+    else:
+        plot_var, ylabel = "I_rot", ("-I_rot [mV]" if negate else "I_rot [mV]")
     data_sign = -1.0 if negate else 1.0
 
     if fit is not None:

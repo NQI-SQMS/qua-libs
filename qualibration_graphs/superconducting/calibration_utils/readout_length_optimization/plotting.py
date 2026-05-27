@@ -17,12 +17,14 @@ def plot_fidelity_vs_length(
         lengths = ds_fit.sel(qubit=q).readout_length_ns.values
         fidelities = ds_fit.sel(qubit=q).fidelity.values
 
-        ax.plot(lengths, 100 * fidelities, "b-", linewidth=1.5, label="Fidelity")
+        # BUG FIX: two_state_discriminator returns fidelity already in percent [0, 100].
+        # Previously this was multiplied by 100 again, producing values like 9000% instead of 90%.
+        ax.plot(lengths, fidelities, "b-", linewidth=1.5, label="Fidelity")
         ax.axvline(
             r["optimal_readout_length_ns"],
             color="r",
             linestyle="--",
-            label=f"Opt. {r['optimal_readout_length_ns']} ns\n({100*r['optimal_fidelity']:.1f}%)",
+            label=f"Opt. {r['optimal_readout_length_ns']} ns\n({r['optimal_fidelity']:.1f}%)",
         )
         ax.set_xlabel("Readout length [ns]")
         ax.set_ylabel("Fidelity [%]")

@@ -2,12 +2,12 @@
 
 Sweeps qubit ge frequency with selective_x180 to resolve photon-number-split peaks.
 Auto-detects number of peaks by fitting increasing Gaussians with shared sigma
-until chi² < threshold.  Peak spacing = 2*chi (dispersive shift).
+until chi² < threshold.  Peak spacing = |chi| (dispersive shift).
 Normalised peak amplitudes give P(n) directly.
 
-Convention: chi = χ/(2π) [Hz] — the Hamiltonian coupling constant in H/ħ = χ a†a σz.
-The per-photon qubit frequency shift is 2*chi; PNRS peak spacing = 2*chi.
-chi = peak_spacing / 2 is stored in the machine state.
+Convention: chi [Hz] is the full per-photon qubit frequency shift, stored with its
+physical sign.  For typical transmon-cavity systems chi < 0 (more photons lower the
+qubit frequency) and |chi| equals the PNRS peak spacing (n=0→n=1 frequency gap).
 """
 import logging
 from dataclasses import dataclass
@@ -29,8 +29,8 @@ except ImportError:
 class FitParameters:
     """Fit results for a single qubit's photon number resolved spectroscopy measurement."""
     chi_hz: float
-    """Dispersive shift χ/(2π) [Hz] (Hamiltonian coupling constant).
-    Peak spacing = 2 * chi_hz."""
+    """Full per-photon qubit frequency shift [Hz], stored negative for typical
+    transmon-cavity systems.  |chi_hz| equals the PNRS peak spacing (n=0→n=1)."""
     peak_positions_hz: List[float]
     """Detuning positions of photon-number peaks [Hz], ordered n=0, n=1, n=2, ...
     (most positive detuning first, i.e. index 0 ≈ 0 detuning = vacuum peak)."""
@@ -245,7 +245,7 @@ def fit_raw_data(
             if len(positions_asc) >= 2:
                 spacings = [positions_asc[i + 1] - positions_asc[i]
                             for i in range(len(positions_asc) - 1)]
-                chi_hz = float(np.mean(spacings)) / 2.0  # peak_spacing/2 = χ/(2π)
+                chi_hz = -float(np.mean(spacings))  # full per-photon shift, negative
             else:
                 chi_hz = float("nan")
 
@@ -263,7 +263,7 @@ def fit_raw_data(
             # Fit P(n) to Poisson to extract mean photon number n̄
             nbar = _fit_poisson_nbar(probs)
 
-            success = bool(np.isfinite(chi_hz) and chi_hz > 0)
+            success = bool(np.isfinite(chi_hz) and chi_hz < 0)
             fit_results[str(q)] = FitParameters(
                 chi_hz=chi_hz,
                 peak_positions_hz=positions,

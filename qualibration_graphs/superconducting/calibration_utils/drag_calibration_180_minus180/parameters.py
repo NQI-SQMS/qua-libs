@@ -18,13 +18,14 @@ class NodeSpecificParameters(RunnableParameters):
         alpha_setpoint (Optional[float]): Optional setpoint for the alpha coefficient. Default is None.
     """
 
-    num_shots: int = 10
+    num_shots: int = 200
     operation: str = "x180"
-    min_amp_factor: float = -1
-    max_amp_factor: float = 2.0
-    amp_factor_step: float = 0.02
-    max_number_pulses_per_sweep: int = 40
+    min_amp_factor: float = 0.0
+    max_amp_factor: float = 1.01
+    amp_factor_step: float = 0.01
+    max_number_pulses_per_sweep: int = 25
     alpha_setpoint: Optional[float] = None
+    smooth_sigma: float = 1.2
 
 
 class Parameters(

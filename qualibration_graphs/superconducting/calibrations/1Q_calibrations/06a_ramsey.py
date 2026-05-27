@@ -148,9 +148,14 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                 )
 
                             # x90 derived from x180_op at half amplitude
+                            # Note: strict_timing_() is not used here because the amp() scaling
+                            # on play() introduces a fixed 2-cycle pipeline latency before wait(),
+                            # which QOP flags as a timing violation. The overhead is deterministic
+                            # (same for every idle_time point) and does not affect the extracted
+                            # Ramsey frequency or T2*.
                             qubit.xy.play(x180_op, amplitude_scale=0.5)
-                            qubit.xy.frame_rotation_2pi(virtual_detuning_phases[i])
                             qubit.xy.wait(idle_time)
+                            qubit.xy.frame_rotation_2pi(virtual_detuning_phases[i])
                             qubit.xy.play(x180_op, amplitude_scale=0.5)
 
                         align()

@@ -246,7 +246,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             # readout the resonator
                             rr.measure("readout", qua_vars=(I[i], Q[i]), amplitude_scale=a)
                             # wait for the resonator to deplete
-                            rr.wait(10 * rr.depletion_time * u.ns)
+                            rr.wait(10 * rr.depletion_time // 4)
                             # save data
                             save(I[i], I_st[i])
                             save(Q[i], Q_st[i])

@@ -1,10 +1,13 @@
 """
-Analysis utilities for the cavity mode T2 Ramsey experiment.
+Analysis utilities for the cavity Fock |1⟩ T2 Ramsey experiment.
 
-The sequence creates a Fock-state superposition (|0>+|1>)/sqrt(2) in the cavity,
-waits a variable time tau with an artificial detuning imprinted via frame rotation,
-then retrieves and measures.  The qubit state oscillates as a decaying sinusoid
-from which T2ramsey of the cavity mode is extracted.
+The sequence prepares the cavity Fock |1⟩ state via the D-SNAP-D protocol,
+then performs a chi-dispersive Ramsey on the qubit at the n=1 dressed qubit
+frequency (qubit_IF − 2χ):
+  X90 → wait tau → frame_rotation(detuning × tau) → X90 → measure.
+
+The qubit state oscillates as a decaying sinusoid from which T2ramsey of the
+cavity Fock |1⟩ state is extracted.
 """
 import logging
 from dataclasses import dataclass
@@ -19,15 +22,18 @@ try:
     from qualibration_libs.data import apply_confusion_correction_to_dataset
 except ImportError:
     def apply_confusion_correction_to_dataset(ds, node):
-        raise NotImplementedError("apply_confusion_correction_to_dataset not available in this qualibration_libs version")
+        raise NotImplementedError(
+            "apply_confusion_correction_to_dataset not available in this qualibration_libs version"
+        )
 from qualibration_libs.analysis import fit_oscillation_decay_exp
 
 
 @dataclass
-class FitParameters:
-    """Fit results for a single qubit's cavity mode T2 Ramsey experiment."""
+class Fock1T2Fit:
+    """Fit results for a single qubit's Fock |1⟩ T2 Ramsey experiment."""
+
     T2ramsey_ns: float
-    """Cavity mode T2 Ramsey time [ns]."""
+    """Cavity Fock |1⟩ T2 Ramsey time [ns]."""
     freq_offset_hz: float
     """Fitted oscillation frequency offset from the applied detuning [Hz]."""
     success: bool
@@ -41,8 +47,8 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
         T2_us = result["T2ramsey_ns"] * 1e-3
         log_callable(
             f"Results for qubit {q}: {status}\n"
-            f"\tCavity T2ramsey: {T2_us:.1f} us | "
-            f"freq offset: {result['freq_offset_hz'] * 1e-3:.3f} kHz"
+            f"\tFock |1⟩ T2ramsey = {T2_us:.1f} µs | "
+            f"freq offset = {result['freq_offset_hz'] * 1e-3:.3f} kHz"
         )
 
 
@@ -57,8 +63,12 @@ def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
 
 def fit_raw_data(
     ds: xr.Dataset, node: QualibrationNode
-) -> Tuple[xr.Dataset, Dict[str, FitParameters]]:
-    """Fit decaying sinusoid in state (or I) vs idle_time for each qubit."""
+) -> Tuple[xr.Dataset, Dict[str, Fock1T2Fit]]:
+    """Fit decaying sinusoid in state (or I) vs idle_time for each qubit.
+
+    Model: P_e(t) = a * exp(-decay * t) * cos(2π * f * t + phi) + offset
+    T2ramsey = 1 / decay.
+    """
     if node.parameters.use_state_discrimination:
         fit_vals = fit_oscillation_decay_exp(ds.state, "idle_time")
     else:
@@ -70,12 +80,11 @@ def fit_raw_data(
     for q in ds_fit.qubit.values:
         fit_q = ds_fit.fit.sel(qubit=q)
         decay = float(fit_q.sel(fit_vals="decay").item())
-        f = float(fit_q.sel(fit_vals="f").item())
-        a = float(fit_q.sel(fit_vals="a").item())
+        f     = float(fit_q.sel(fit_vals="f").item())
+        a     = float(fit_q.sel(fit_vals="a").item())
 
         if np.isfinite(decay) and decay > 0 and np.isfinite(a) and a > 0:
             T2ramsey_ns = float(decay) * 1e9  # decay is in seconds from fit_oscillation_decay_exp
-            # freq_offset = difference between fitted freq and applied detuning
             freq_offset_hz = float(f) * 1e9 - node.parameters.ramsey_detuning_hz
             success = True
         else:
@@ -83,7 +92,7 @@ def fit_raw_data(
             freq_offset_hz = float("nan")
             success = False
 
-        fit_results[q] = FitParameters(
+        fit_results[q] = Fock1T2Fit(
             T2ramsey_ns=T2ramsey_ns,
             freq_offset_hz=freq_offset_hz,
             success=success,

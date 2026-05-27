@@ -104,11 +104,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 node.machine.initialize_qpu(target=qubit)
             align()
 
-            for i, qubit in multiplexed_qubits.items():
-                shift = qubit.resonator.GEF_frequency_shift if qubit.resonator.GEF_frequency_shift is not None else 0
-                qubit.resonator.update_frequency(
-                    qubit.resonator.intermediate_frequency + shift
-                )  # resonator frequency shift for GEF
+            # for i, qubit in multiplexed_qubits.items():
+            #     shift = qubit.resonator.GEF_frequency_shift if qubit.resonator.GEF_frequency_shift is not None else 0
+            #     qubit.resonator.update_frequency(
+            #         qubit.resonator.intermediate_frequency + shift
+            #     )  # resonator frequency shift for GEF
 
             with for_(n, 0, n < n_runs, n + 1):
                 save(n, n_st)
@@ -116,12 +116,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 # Ground state iq blobs for all qubits
                 # Qubit initialization
                 for i, qubit in multiplexed_qubits.items():
-                    qubit.wait(2 * qubit.thermalization_time * u.ns)  # longer wait for |f> thermalization
+                    qubit.wait(2 * qubit.thermalization_time // 4)  # longer wait for |f> thermalization
                 align()
                 # |g> state readout
                 for i, qubit in multiplexed_qubits.items():
                     qubit.resonator.measure(operation, qua_vars=(I_g[i], Q_g[i]))
-                    qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                    qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                     # save data
                     save(I_g[i], I_g_st[i])
                     save(Q_g[i], Q_g_st[i])
@@ -130,22 +130,22 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 # Excited state iq blobs for all qubits
                 # Qubit initialization
                 for i, qubit in multiplexed_qubits.items():
-                    qubit.wait(2 * qubit.thermalization_time * u.ns)  # longer wait for |f> thermalization
+                    qubit.wait(2 * qubit.thermalization_time // 4)  # longer wait for |f> thermalization
                 align()
                 # |e> state readout
                 for i, qubit in multiplexed_qubits.items():
                     qubit.xy.play("x180")
                     qubit.align()
                     qubit.resonator.measure(operation, qua_vars=(I_e[i], Q_e[i]))
-                    qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
                     # save data
                     save(I_e[i], I_e_st[i])
                     save(Q_e[i], Q_e_st[i])
+                    qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
                 # Second excited state iq blobs for all qubits
                 # Qubit reset
                 for i, qubit in multiplexed_qubits.items():
-                    qubit.wait(2 * qubit.thermalization_time * u.ns)  # longer wait for |f> thermalization
+                    qubit.wait(2 * qubit.thermalization_time // 4)  # longer wait for |f> thermalization
                 align()
                 # |f> state readout
                 for i, qubit in multiplexed_qubits.items():
@@ -155,10 +155,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     update_frequency(qubit.xy.name, qubit.xy.intermediate_frequency)
                     qubit.align()
                     qubit.resonator.measure(operation, qua_vars=(I_f[i], Q_f[i]))
-                    qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
                     # save data
                     save(I_f[i], I_f_st[i])
                     save(Q_f[i], Q_f_st[i])
+                    qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
         with stream_processing():
             n_st.save("n")

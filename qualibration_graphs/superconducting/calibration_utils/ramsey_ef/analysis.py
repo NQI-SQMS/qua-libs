@@ -35,7 +35,7 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
     for q in fit_results.keys():
         s_qubit = f"Results for qubit {q}: "
         s_detuning = f"\tEF detuning to correct: {1e-6 * fit_results[q]['freq_offset']:.3f} MHz | "
-        s_T2 = f"EF T2*: {1e6 * fit_results[q]['decay']:.1f} µs\n"
+        s_T2 = f"EF T2*: {1e6 * fit_results[q]['decay']:.1f} us\n"
         chi2_val = fit_results[q].get("chi2", float("nan"))
         if np.isfinite(chi2_val):
             s_T2 += f"\tResidual chi2: {chi2_val:.3f}\n"

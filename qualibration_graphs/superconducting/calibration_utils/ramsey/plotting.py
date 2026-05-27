@@ -1,4 +1,5 @@
 from typing import List
+import numpy as np
 import xarray as xr
 from matplotlib.axes import Axes
 from matplotlib.figure import Figure
@@ -63,8 +64,7 @@ def plot_individual_data_with_fit(ax: Axes, ds: xr.Dataset, qubit: dict[str, str
     -----
     - If the fit dataset is provided, the fitted curve is plotted along with the raw data.
     """
-    pass
-    if fit:
+    if fit is not None:
         fitted_ramsey_data = oscillation_decay_exp(
             ds.idle_time,
             fit.sel(fit_vals="a"),
@@ -87,8 +87,8 @@ def plot_individual_data_with_fit(ax: Axes, ds: xr.Dataset, qubit: dict[str, str
 
     ax.set_xlabel("Idle time [ns]")
     ax.set_title(qubit["qubit"])
-    # if fit is not None:
-    #     add_fit_text(ax, fit)
+    if fit is not None:
+        add_fit_text(ax, fit)
     ax.legend()
 
 
@@ -127,13 +127,19 @@ def plot_transmission_amplitude(ax, ds, qubit, fitted=None):
 
 
 def add_fit_text(ax, fit):
-    """Add fit results text to the axis."""
+    """Add T2* fit results text to the axis corner."""
+    fit_da = fit["fit"] if isinstance(fit, xr.Dataset) else fit
+    decay = float(fit_da.sel(fit_vals="decay").mean(dim="detuning_signs"))
+    decay_res = float(fit_da.sel(fit_vals="decay_decay").mean(dim="detuning_signs"))
+    tau_us = 1e-3 / decay  # T2* in µs (idle_time is in ns, so decay is in 1/ns)
+    tau_err_us = tau_us * (np.sqrt(decay_res) / abs(decay))
     ax.text(
-        0.1,
-        0.9,
-        f"T2* = {1e6 * fit.decay:.1f} ± {1e6 * fit.decay_error:.1f} µs",
+        0.98,
+        0.98,
+        f"T2* = {tau_us:.2f} ± {tau_err_us:.2f} µs",
         transform=ax.transAxes,
         fontsize=10,
         verticalalignment="top",
+        horizontalalignment="right",
         bbox=dict(facecolor="white", alpha=0.5),
     )

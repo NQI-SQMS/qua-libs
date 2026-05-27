@@ -11,9 +11,13 @@ class NodeSpecificParameters(RunnableParameters):
     mode_name: str = "alice"
     """Which cavity mode to calibrate: 'alice' or 'bob'."""
     amp_min: float = 0.0
-    """Minimum displacement amplitude_scale. Use 0.0 to sweep only positive amplitudes."""
+    """Minimum displacement amplitude in photon units (α).
+    The QUA amplitude_scale is computed as amp_min / displacement_alpha_max,
+    so the physical sweep always covers [amp_min, amp_max] photons regardless
+    of the current calibration.  Use 0.0 to sweep only positive amplitudes."""
     amp_max: float = 2.0
-    """Maximum displacement amplitude_scale."""
+    """Maximum displacement amplitude in photon units (α).
+    See amp_min for details."""
     amp_points: int = 51
     """Number of amplitude points (linearly spaced from amp_min to amp_max)."""
     qubit_pulse: str = "selective_x180"
@@ -34,9 +38,6 @@ class NodeSpecificParameters(RunnableParameters):
     Set to a longer value (e.g. several ms) to ensure the cavity photon
     decoheres fully during each cooling step, at the cost of longer reset time.
     Must be a multiple of 4 ns."""
-    active_reset: bool = True
-    """If True, apply D(-a) immediately after measurement to return the cavity
-    toward vacuum, replacing passive thermalization for the next shot."""
     subtract_baseline: bool = True
     """If True, run a second sub-sequence WITHOUT the qubit π-pulse at every amplitude
     point and subtract its averaged IQ from the signal IQ before any state-discrimination

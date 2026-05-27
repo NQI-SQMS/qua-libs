@@ -1,66 +1,69 @@
 # %% {Imports}
 import matplotlib.pyplot as plt
-import numpy as np
-import xarray as xr
 from dataclasses import asdict
 
-from qm.qua import *
+import numpy as np
+import xarray as xr
 
-from qualang_tools.loops import from_array
+from qm.qua import *
+from qm.qua.lib import Cast
+
 from qualang_tools.multi_user import qm_session
 from qualang_tools.results import progress_counter
 from qualang_tools.units import unit
 
 from qualibrate import QualibrationNode
+from qualibration_libs.parameters import (
+    get_qubits,
+    get_idle_times_in_clock_cycles,
+)
+from qualibration_libs.data import XarrayDataFetcher
+from qualibration_libs.runtime import simulate_and_plot
 from quam_config import Quam
-from calibration_utils.photon_number_resolved_spectroscopy import (
-    Parameters,
+from calibration_utils.cavity_coherent_T2 import (
     process_raw_dataset,
     fit_raw_data,
     log_fitted_results,
     plot_raw_data_with_fit,
 )
-from qualibration_libs.parameters import get_qubits
-from qualibration_libs.runtime import simulate_and_plot
-from qualibration_libs.data import XarrayDataFetcher
+from calibration_utils.cavity_coherent_T2.parameters import Parameters
 
+_AMP_MAX = 2.0 - 2**-16  # QUA hardware limit for amplitude_scale
 
-# %% {Description}
+# %% {Node initialisation}
 description = """
-        PHOTON NUMBER RESOLVED SPECTROSCOPY — CHI MEASUREMENT (29)
+        CAVITY MODE T2 RAMSEY (COHERENT STATE)
+Measures the T2 Ramsey coherence time of a cavity mode (e.g. alice or bob) by
+creating a coherent state and performing a displacement-based Ramsey experiment:
 
-Displaces the selected cavity mode to a coherent state |α⟩ and sweeps the
-qubit ge spectroscopy frequency.  The resulting spectrum shows photon-number-
-split peaks:
+  1. Wait thermalization time
+  2. Displace cavity → |α⟩  (amplitude_scale = displacement_alpha / alpha_max)
+  3. Wait variable time tau
+  4. Frame rotation by (detuning_hz * 1e-9 * 4 * tau) turns  [artificial detuning]
+  5. Reverse displace (same amplitude, opposite sign)  →  residual coherent state
+  6. Reset frame
+  7. π pulse on qubit  (non-selective x180)
+  8. Measure qubit state
 
-    f_n = f_q + chi*n   (n=0, 1, 2, ...)
-
-separated by |chi|.  The node auto-detects the number of peaks (1 → max_peaks)
-by fitting successive multi-Gaussian models until the reduced chi² drops below
-the threshold.  chi = -(mean PNRS peak spacing) is saved to the machine state.
-
-Convention: chi [Hz] is the full per-photon qubit frequency shift (negative for
-typical transmon-cavity systems where more photons lower the qubit frequency).
-chi = -(PNRS peak spacing) and |chi| = PNRS peak spacing.
-
-After measurement an optional active reset applies D(-α) to return the cavity
-to vacuum immediately, replacing passive thermalization.
+P(|e⟩) vs tau follows a decaying sinusoid with time constant T2ramsey.
 
 Prerequisites:
-    - Calibrated qubit_pulse operation on qubit.xy (e.g. selective_x180 or x180).
-    - A 'displacement' operation on cavity_mode_drive.
+    - Calibrated displacement amplitude (node 22 or 32).
 
 Parameters:
-    - displacement_alpha:  coherent state amplitude |α|; amplitude_scale is computed
-                           as displacement_alpha / displacement_alpha_max from QuAM state.
-    - qubit_pulse:         qubit operation for spectroscopy ('selective_x180' or 'x180').
+    - mode_name:             'alice' or 'bob'
+    - displacement_alpha:    Coherent state amplitude |α|
+    - ramsey_detuning_hz:    Artificial detuning for Ramsey fringes [Hz]
+    - idle_time_*:           Range of wait times
 
 State update:
-    - cavity_transmon_pairs chi  [Hz]  (if the pair exists in the machine)
+    - cavity_mode.T2ramsey  (seconds)
 """
 
+
+
 node = QualibrationNode[Parameters, Quam](
-    name="24_photon_number_resolved_spectroscopy",
+    name="29_cavity_coherent_T2",
     description=description,
     parameters=Parameters(),
 )
@@ -70,6 +73,7 @@ node = QualibrationNode[Parameters, Quam](
 def custom_param(node: QualibrationNode[Parameters, Quam]):
     # node.parameters.mode_name = "alice"
     # node.parameters.displacement_alpha = 1.0
+    # node.parameters.ramsey_detuning_hz = 1000.0
     pass
 
 
@@ -93,15 +97,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     num_qubits = len(qubits)
 
     n_avg = node.parameters.num_shots
-    step_hz = int(node.parameters.frequency_step_in_mhz * u.MHz)
-    left_hz = int(node.parameters.left_span_mhz * u.MHz)
-    right_hz = int(node.parameters.right_offset_mhz * u.MHz)
-    dfs = np.arange(-left_hz, right_hz, step_hz)
+    idle_times = get_idle_times_in_clock_cycles(node.parameters)  # in clock cycles (4 ns)
 
     cavity_mode = _get_cavity_mode(node)
-    node.namespace["cavity_mode"] = cavity_mode
 
-    # Resolve sideband_drive and alpha_max from the CavityTransmonPair QuAM state
+    # Resolve sideband_drive and displacement_alpha_max from the CavityTransmonPair QuAM state
     mode_name = node.parameters.mode_name
     sideband_drive = None
     alpha_max = 1.0
@@ -113,25 +113,35 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             if getattr(pair, "displacement_alpha_max", None) is not None:
                 alpha_max = float(pair.displacement_alpha_max)
             break
-
+    node.namespace["sideband_drive"] = sideband_drive
     amplitude_scale = node.parameters.displacement_alpha / alpha_max
+    if abs(amplitude_scale) > _AMP_MAX:
+        raise ValueError(
+            f"displacement_alpha={node.parameters.displacement_alpha} / "
+            f"alpha_max={alpha_max} = {amplitude_scale:.4f} exceeds the QUA "
+            f"hardware limit ±{_AMP_MAX:.6f}.  Reduce displacement_alpha."
+        )
+    node.namespace["amplitude_scale"] = amplitude_scale
     node.log(
         f"Displacement: alpha={node.parameters.displacement_alpha}, "
         f"alpha_max={alpha_max}, amplitude_scale={amplitude_scale:.4f}"
     )
-    node.namespace["amplitude_scale"] = amplitude_scale
-    node.namespace["sideband_drive"] = sideband_drive
+
+    # Phase increment per clock cycle for the frame rotation:
+    # detuning_hz * 1e-9 * 4 ns/cc = turns per clock cycle
+    detuning_turns_per_cc = node.parameters.ramsey_detuning_hz * 1e-9 * 4
 
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
-        "detuning": xr.DataArray(
-            dfs, attrs={"long_name": "qubit detuning", "units": "Hz"}
+        "idle_time": xr.DataArray(
+            4 * idle_times, attrs={"long_name": "idle time", "units": "ns"}
         ),
     }
 
     with program() as node.namespace["qua_program"]:
         n = declare(int)
-        df = declare(int)
+        t = declare(int)
+        phase = declare(fixed)
         n_st = declare_stream()
 
         I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
@@ -145,8 +155,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
-                with for_(*from_array(df, dfs)):
-                    # --- Reset cavity and qubit BEFORE displacement ---
+
+                with for_each_(t, idle_times):
+                    # ── 1. Reset cavity and qubit ─────────────────────────────
                     sideband_drive = node.namespace["sideband_drive"]
                     for i, qubit in multiplexed_qubits.items():
                         cavity_mode.reset(
@@ -164,24 +175,39 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             log_callable=node.log,
                         )
 
-                    # Displace cavity to coherent state |α⟩.
-                    # align() with no args includes cavity_mode_drive, which is not part of qubit.align().
+                    # ── 2. Displace cavity → coherent state |α⟩ ──────────────
                     align()
                     cavity_mode.cavity_mode_drive.play(
                         "displacement",
                         amplitude_scale=node.namespace["amplitude_scale"],
                     )
 
+                    # ── 3. Wait tau ───────────────────────────────────────────
+                    align()
                     for i, qubit in multiplexed_qubits.items():
-                        # Qubit spectroscopy with selective pulse
-                        align(cavity_mode.cavity_mode_drive.name, qubit.xy.name)
-                        qubit.xy.update_frequency(
-                            df + qubit.xy.intermediate_frequency
-                        )
-                        qubit.xy.play(node.parameters.qubit_pulse)
+                        qubit.resonator.wait(t)
 
-                        # Measure
-                        align(qubit.xy.name, qubit.resonator.name)
+                    # ── 4. Frame rotation (artificial detuning) ───────────────
+                    assign(phase, Cast.mul_fixed_by_int(detuning_turns_per_cc, t))
+                    frame_rotation_2pi(phase, cavity_mode.cavity_mode_drive.name)
+
+                    # ── 5. Reverse displacement ───────────────────────────────
+                    align()
+                    cavity_mode.cavity_mode_drive.play(
+                        "displacement",
+                        amplitude_scale=-node.namespace["amplitude_scale"],
+                    )
+                    reset_frame(cavity_mode.cavity_mode_drive.name)
+
+                    # ── 6. π pulse on qubit ───────────────────────────────────
+                    align()
+                    for i, qubit in multiplexed_qubits.items():
+                        qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
+                        qubit.xy.play(node.parameters.qubit_probe_operation)
+
+                    # ── 7. Measure ────────────────────────────────────────────
+                    align()
+                    for i, qubit in multiplexed_qubits.items():
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
@@ -195,29 +221,23 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
-                I_st[i].buffer(len(dfs)).average().save(f"I{i + 1}")
-                Q_st[i].buffer(len(dfs)).average().save(f"Q{i + 1}")
+                I_st[i].buffer(len(idle_times)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(idle_times)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
-                    state_st[i].buffer(len(dfs)).average().save(f"state{i + 1}")
+                    state_st[i].buffer(len(idle_times)).average().save(f"state{i + 1}")
 
 
 # %% {Simulate}
-@node.run_action(
-    skip_if=node.parameters.load_data_id is not None or not node.parameters.simulate
-)
+@node.run_action(skip_if=node.parameters.load_data_id is not None or not node.parameters.simulate)
 def simulate_qua_program(node: QualibrationNode[Parameters, Quam]):
     qmm = node.machine.connect()
     config = node.machine.generate_config()
-    samples, fig, wf_report = simulate_and_plot(
-        qmm, config, node.namespace["qua_program"], node.parameters
-    )
+    samples, fig, wf_report = simulate_and_plot(qmm, config, node.namespace["qua_program"], node.parameters)
     node.results["simulation"] = {"figure": fig, "wf_report": wf_report, "samples": samples}
 
 
 # %% {Execute}
-@node.run_action(
-    skip_if=node.parameters.load_data_id is not None or node.parameters.simulate
-)
+@node.run_action(skip_if=node.parameters.load_data_id is not None or node.parameters.simulate)
 def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
     qmm = node.machine.connect()
     config = node.machine.generate_config()
@@ -226,7 +246,7 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
         data_fetcher = XarrayDataFetcher(job, node.namespace["sweep_axes"])
         for dataset in data_fetcher:
             progress_counter(
-                data_fetcher.get("n", 0),
+                data_fetcher["n"],
                 node.parameters.num_shots,
                 start_time=data_fetcher.t_start,
             )
@@ -234,14 +254,13 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
     node.results["ds_raw"] = dataset
 
 
-# %% {Load_historical_data}
+# %% {Load_data}
 @node.run_action(skip_if=node.parameters.load_data_id is None)
 def load_data(node: QualibrationNode[Parameters, Quam]):
     load_data_id = node.parameters.load_data_id
     node.load_from_id(node.parameters.load_data_id)
     node.parameters.load_data_id = load_data_id
     node.namespace["qubits"] = get_qubits(node)
-    node.namespace["cavity_mode"] = _get_cavity_mode(node)
 
 
 # %% {Analyse_data}
@@ -250,10 +269,11 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
     node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
     node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}
+
     log_fitted_results(node.results["fit_results"], log_callable=node.log)
     node.outcomes = {
-        q: ("successful" if res["success"] else "failed")
-        for q, res in node.results["fit_results"].items()
+        q_name: ("successful" if res["success"] else "failed")
+        for q_name, res in node.results["fit_results"].items()
     }
 
 
@@ -261,34 +281,31 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def plot_data(node: QualibrationNode[Parameters, Quam]):
     fig = plot_raw_data_with_fit(
-        node.results["ds_fit"],
+        node.results["ds_raw"],
         node.namespace["qubits"],
+        node.results["ds_fit"],
         fit_results=node.results["fit_results"],
         mode_name=node.parameters.mode_name,
-        displacement_alpha=node.parameters.displacement_alpha,
-        normalize_plot=node.parameters.normalize_plot,
     )
     plt.show()
-    node.results["figures"] = {"photon_number_resolved_spectroscopy": fig}
+    node.results["figures"] = {"cavity_coherent_T2": fig}
 
 
 # %% {Update_state}
 @node.run_action(skip_if=node.parameters.simulate)
 def update_state(node: QualibrationNode[Parameters, Quam]):
-    """Save the measured dispersive shift chi to the machine state."""
     mode_name = node.parameters.mode_name
     with node.record_state_updates():
-        for qubit in node.namespace["qubits"]:
-            res = node.results["fit_results"].get(qubit.name)
-            if res is None or not res["success"]:
+        for q in node.namespace["qubits"]:
+            if node.outcomes[q.name] == "failed":
                 continue
-            chi_hz = float(res["chi_hz"])
-
-            # Write to CavityTransmonPair
-            pair_key = f"{qubit.name}_{mode_name}"
-            pairs = getattr(node.machine, "cavity_transmon_pairs", None)
-            if pairs is not None and pair_key in pairs:
-                pairs[pair_key].chi = chi_hz
+            T2ramsey_ns = node.results["fit_results"][q.name]["T2ramsey_ns"]
+            T2ramsey_s = float(T2ramsey_ns) * 1e-9
+            for cav in node.machine.cavities.values():
+                mode = getattr(cav, mode_name, None)
+                if mode is not None and hasattr(mode, "T2ramsey"):
+                    mode.T2ramsey = T2ramsey_s
+                    break
 
 
 # %% {Save_results}

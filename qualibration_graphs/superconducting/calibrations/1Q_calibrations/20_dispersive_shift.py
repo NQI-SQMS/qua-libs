@@ -99,7 +99,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             qubit.resonator.intermediate_frequency + df
                         )
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        qubit.resonator.wait(node.machine.depletion_time // 4)
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
                     align()
@@ -107,13 +107,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 # ── |e⟩ sweep ──────────────────────────────────────────────
                 with for_(*from_array(df, dfs)):
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.xy.wait(qubit.thermalization_time * u.ns)
+                        qubit.xy.wait(qubit.thermalization_time // 4)
                         qubit.xy.play("x180")
                         qubit.resonator.update_frequency(
                             qubit.resonator.intermediate_frequency + df
                         )
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        qubit.resonator.wait(node.machine.depletion_time // 4)
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
                     align()
@@ -198,8 +198,9 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 continue
             res = node.results["fit_results"][q.name]
             q.resonator.RF_frequency = res["f_optimal"]
-            # Store chi if attribute exists (SrfQuam may add it)
-            if hasattr(q, "chi"):
+            # Store chi if attribute exists — but skip CavityMode objects,
+            # which should not have chi set here (it lives in CavityTransmonPair).
+            if hasattr(q, "chi") and not hasattr(q, "cavity_mode_drive"):
                 q.chi = res["chi_hz"]
 
 

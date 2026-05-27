@@ -1,4 +1,5 @@
 from typing import List
+import numpy as np
 import xarray as xr
 from matplotlib.axes import Axes
 
@@ -76,7 +77,28 @@ def plot_individual_data_with_fit(ax: Axes, ds: xr.Dataset, qubit: dict[str, str
 
     ax.set_xlabel("Idle time [ns]")
     ax.set_title(qubit["qubit"])
+    if fit is not None:
+        _add_fit_text(ax, fit)
     ax.legend()
+
+
+def _add_fit_text(ax, fit):
+    """Add T2*_ef fit results text to the axis corner."""
+    fit_da = fit["fit"] if isinstance(fit, xr.Dataset) else fit
+    decay = float(fit_da.sel(fit_vals="decay").mean(dim="detuning_signs"))
+    decay_res = float(fit_da.sel(fit_vals="decay_decay").mean(dim="detuning_signs"))
+    tau_us = 1e-3 / decay  # T2*_ef in µs (idle_time in ns, so decay is in 1/ns)
+    tau_err_us = tau_us * (np.sqrt(decay_res) / abs(decay))
+    ax.text(
+        0.98,
+        0.98,
+        f"T2*_ef = {tau_us:.2f} ± {tau_err_us:.2f} µs",
+        transform=ax.transAxes,
+        fontsize=10,
+        verticalalignment="top",
+        horizontalalignment="right",
+        bbox=dict(facecolor="white", alpha=0.5),
+    )
 
 
 def _plot_state(ax, ds, qubit, fitted=None):

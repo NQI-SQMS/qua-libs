@@ -14,6 +14,12 @@ class NodeSpecificParameters(RunnableParameters):
     """Number of (T1 + Ramsey + echo + RPM) iterations to repeat."""
 
     # ── Ramsey (T2* + qubit frequency) sweep ────────────────────────────────
+    x180_operation: str = "x180"
+    """Operation name used as the π pulse. The x90 half-pulse is derived by playing this
+    operation at amplitude_scale=0.5. Default is 'x180'."""
+    correct_with_pulse_detuning: bool = False
+    """If True, shift the qubit XY element IF by the chosen pulse's detuning value before
+    playing the Ramsey sequence and restore it afterwards."""
     ramsey_min_wait_time_in_ns: int = 16
     """Minimum Ramsey idle time [ns]. Default is 16 ns."""
     ramsey_max_wait_time_in_ns: int = 15000

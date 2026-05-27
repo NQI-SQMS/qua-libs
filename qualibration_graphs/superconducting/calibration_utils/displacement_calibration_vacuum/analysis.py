@@ -225,15 +225,19 @@ def fit_raw_data(
         signal = ds_q[signal_name].values.astype(float)
 
         # Initial guesses
-        offset0 = float(np.mean(signal[a_arr > 0.8 * a_arr.max()]))
-        amplitude0 = float(signal[a_arr == a_arr.min()].mean()) - offset0
-        # sigma: amplitude drops to 1/e of peak at a = sigma
+        # Use the tails at both ends for offset (works for symmetric or positive-only scans)
+        tail_mask = np.abs(a_arr) > 0.8 * np.abs(a_arr).max()
+        offset0 = float(np.mean(signal[tail_mask])) if tail_mask.any() else float(signal[-1])
+        # Peak is at a≈0 (not at a_arr.min() which may be a large negative displacement)
+        peak_idx = np.argmin(np.abs(a_arr))
+        amplitude0 = float(signal[peak_idx]) - offset0
+        # sigma: amplitude drops to 1/e of peak at |a| = sigma
         target = offset0 + amplitude0 / np.e
-        above = a_arr[signal > target]
-        sigma0 = float(above.max()) if len(above) > 0 else float(a_arr.max()) * 0.5
+        above = np.abs(a_arr)[signal > target]
+        sigma0 = float(above.max()) if len(above) > 0 else float(np.abs(a_arr).max()) * 0.5
 
         try:
-            a_max = float(a_arr.max())
+            a_max = float(np.abs(a_arr).max())
             popt, _ = curve_fit(
                 vacuum_population,
                 a_arr,

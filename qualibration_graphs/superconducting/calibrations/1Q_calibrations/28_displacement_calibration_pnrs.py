@@ -43,10 +43,10 @@ calibration curve n̄ = k·A² is fitted to obtain:
 
     A₁ph = 1/√k  — displacement amplitude_scale that deposits 1 photon on average
 
-The dispersive shift chi (peak spacing 2χ) is also extracted from the spectra.
+The dispersive shift chi = -(PNRS peak spacing) [Hz] is also extracted from the spectra.
 
 Physical model:
-    ω_q(n) = ω_q − 2χ·n   (each photon red-shifts the qubit by 2χ)
+    ω_q(n) = ω_q + chi·n   (each photon shifts the qubit by chi; chi < 0)
     P(n)   = exp(−n̄) · n̄ⁿ / n!   (coherent state: Poisson distribution)
 
 Prerequisites:
@@ -204,9 +204,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             if node.parameters.use_state_discrimination:
                                 assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
-
-                            qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                         align()
 
         with stream_processing():

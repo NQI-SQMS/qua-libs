@@ -45,14 +45,11 @@ sub-sequences for every amplitude point:
     1a. Reset cavity + qubit.
     1b. Displace cavity to |α = a · A_unit⟩.
     1c. Measure readout IQ  →  I_base, Q_base  (cross-Kerr offset only).
-    1d. Apply D(-a) if active_reset = True.
-
   PART 2 — Signal (full protocol):
     2a. Reset cavity + qubit (independent reset, same conditions as Part 1).
     2b. Displace cavity identically.
     2c. Apply selective_x180 (or x180) on qubit — flips qubit only when cavity is in |0⟩.
     2d. Measure readout IQ  →  I, Q  (cross-Kerr offset + vacuum-population signal).
-    2e. Apply D(-a) if active_reset = True.
 
 Post-processing (in analysis.py, before state discrimination):
     I_corr(a) = I(a) - I_base(a)    ≈  P_vacuum(a) · (I_e - I_g)
@@ -71,7 +68,6 @@ Parameters:
   - mode_name:       Cavity mode to calibrate ('alice' or 'bob').
   - qubit_pulse:     'selective_x180' (spectrally selective, recommended) or 'x180'.
   - amp_min/max:     Amplitude sweep range (amp_min=0 for half-Gaussian).
-  - active_reset:    Play D(-a) after each sub-sequence to speed up thermalization.
 
 State updates:
   - cavity_mode.cavity_mode_drive.operations["displacement"].amplitude
@@ -92,7 +88,6 @@ def custom_param(node: QualibrationNode[Parameters, Quam]):
     # node.parameters.amp_min = 0.0
     # node.parameters.amp_max = 2.0
     # node.parameters.amp_points = 51
-    # node.parameters.active_reset = True
     # node.parameters.num_shots = 1000
     pass
 
@@ -187,7 +182,6 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             state_st = [declare_stream() for _ in range(num_qubits)]
 
         a = declare(fixed)      # current displacement amplitude scale
-        a_neg = declare(fixed)  # negated amplitude for the D(-a) active-reset pulse
 
         for multiplexed_qubits in qubits.batch():
             for qubit in multiplexed_qubits.values():
@@ -196,7 +190,6 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
                 with for_(*from_array(a, amp_array)):
-                    assign(a_neg, -a)   # pre-compute negated amplitude once per point
 
                     # ============================================================
                     # PART 1 — BASELINE measurement (only when subtract_baseline=True)
@@ -246,15 +239,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             save(I_base[i], I_base_st[i])
                             save(Q_base[i], Q_base_st[i])
                             # Wait for the resonator ring-down before the next sequence.
-                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
-
-                        # Optional D(-a): return the cavity toward vacuum to speed up
-                        # thermalization before the signal sequence.
-                        align()
-                        if node.parameters.active_reset:
-                            align()
-                            cavity_mode.cavity_mode_drive.play("displacement", amplitude_scale=a_neg)
-                        align()
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
                     # ============================================================
                     # PART 2 — SIGNAL measurement (full protocol, WITH π-pulse)
@@ -312,14 +297,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         if not subtract_baseline and node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
-
-                    # Optional active reset after the signal sequence.
-                    align()
-                    if node.parameters.active_reset:
-                        align()
-                        cavity_mode.cavity_mode_drive.play("displacement", amplitude_scale=a_neg)
-                    align()
+                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
         with stream_processing():
             n_st.save("n")
@@ -409,6 +387,7 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
         qubit_pulse=node.parameters.qubit_pulse,
         normalize_plot=node.parameters.normalize_plot,
         base_amplitude=base_amp,
+        current_alpha_max=node.namespace.get("current_alpha_max", 1.0),
     )
     plt.show()
     node.results["figures"] = {"vacuum_calibration": fig}

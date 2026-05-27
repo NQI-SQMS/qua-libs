@@ -71,7 +71,7 @@ node.machine = Quam.load()
 # %% {Create_QUA_program}
 @node.run_action(skip_if=node.parameters.load_data_id is not None)
 def create_qua_program(node: QualibrationNode[Parameters, Quam]):
-node.namespace["qubits"] = qubits = get_qubits(node)
+    node.namespace["qubits"] = qubits = get_qubits(node)
     num_qubits = len(qubits)
 
     n_avg = node.parameters.num_shots

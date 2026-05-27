@@ -61,7 +61,7 @@ State updates
 -------------
   • cavity_transmon_pairs["{qubit}_{mode}"].parity_time   [seconds]
   • cavity_transmon_pairs["{qubit}_{mode}"].chi           [Hz]
-    chi = chi_eff_hz / 2  (Hamiltonian convention: per-photon shift = 2·chi)
+    chi = -chi_eff_hz  (full per-photon shift, negative for typical transmon-cavity)
     chi_eff_hz is the Ramsey oscillation frequency ≈ PNRS peak spacing (n=0→1).
 """
 
@@ -216,7 +216,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                 ),
                             )
                             save(state[i], state_st[i])
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        qubit.resonator.wait(node.machine.depletion_time // 4)
 
                     align()
         with stream_processing():
@@ -322,11 +322,11 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             if pairs is not None and pair_key in pairs:
                 pairs[pair_key].parity_time = float(res.parity_time_s)
                 # chi_eff_hz is the Ramsey oscillation frequency = PNRS peak spacing (n=0→1)
-                # pair.chi uses the Hamiltonian convention: per-photon shift = 2·pair.chi
-                pairs[pair_key].chi = float(res.chi_eff_hz / 2.0)
+                # pair.chi stores the full per-photon shift with sign: chi = -chi_eff_hz
+                pairs[pair_key].chi = -float(res.chi_eff_hz)
                 node.log(
                     f"Updated {pair_key}.parity_time = {res.parity_time_s * 1e9:.0f} ns  |  "
-                    f"chi = {res.chi_eff_hz / 2e3:.2f} kHz"
+                    f"chi = {-res.chi_eff_hz / 1e3:.2f} kHz"
                 )
             else:
                 logger.warning(

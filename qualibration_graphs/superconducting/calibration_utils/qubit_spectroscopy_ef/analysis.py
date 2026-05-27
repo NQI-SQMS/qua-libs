@@ -87,19 +87,35 @@ def _compute_chi2_lorentzian(fit: xr.Dataset, signal: xr.DataArray) -> xr.DataAr
 def fit_raw_data(ds: xr.Dataset, node: QualibrationNode) -> Tuple[xr.Dataset, dict[str, FitParameters]]:
     """
     Fit the EF qubit frequency and FWHM for each qubit in the dataset.
+
+    When ``node.parameters.signal_source == 'IQ_abs'`` the magnitude is used for
+    fitting directly (no IQ rotation is needed and the integration weight angle is
+    left unchanged).  When ``signal_source == 'I_rot'`` (default) the IQ data is
+    rotated via PCA to maximize qubit-induced variance in a single quadrature.
     """
+    signal_source = getattr(node.parameters, "signal_source", "I_rot")
+    is_dip = getattr(node.parameters, "find_dip", False)
+
     ds_fit = ds
-    # Find the detuning with maximum IQ amplitude deviation from mean
+    # Always compute I_rot so it is available for inspection even when IQ_abs is used.
     shifts = np.abs((ds_fit.IQ_abs - ds_fit.IQ_abs.mean(dim="detuning"))).idxmax(dim="detuning")
-    # Compute rotation angle to align the peak along the I axis
     angle = np.arctan2(
         ds_fit.sel(detuning=shifts).Q - ds_fit.Q.mean(dim="detuning"),
         ds_fit.sel(detuning=shifts).I - ds_fit.I.mean(dim="detuning"),
     )
     ds_fit = ds_fit.assign({"iw_angle": angle})
     ds_fit = ds_fit.assign({"I_rot": ds_fit.I * np.cos(ds_fit.iw_angle) + ds_fit.Q * np.sin(ds_fit.iw_angle)})
-    # For reflection readout (find_dip=True) negate I_rot so peaks_dips sees a peak
-    signal_for_fit = -ds_fit.I_rot if getattr(node.parameters, "find_dip", False) else ds_fit.I_rot
+
+    # Select the signal passed to peaks_dips
+    if signal_source == "IQ_abs":
+        signal_for_fit = ds_fit.IQ_abs
+    elif signal_source == "I":
+        signal_for_fit = -ds_fit.I if is_dip else ds_fit.I
+    elif is_dip:
+        signal_for_fit = -ds_fit.I_rot
+    else:
+        signal_for_fit = ds_fit.I_rot
+
     fit_vals = peaks_dips(signal_for_fit, dim="detuning", prominence_factor=5)
     ds_fit = xr.merge([ds_fit, fit_vals])
     fit_data, fit_results = _extract_relevant_fit_parameters(ds_fit, node)
@@ -123,14 +139,15 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
     fit = fit.assign({"fwhm": fwhm})
     fit.fwhm.attrs = {"long_name": "EF fwhm", "units": "Hz"}
 
+    signal_source = getattr(node.parameters, "signal_source", "I_rot")
     prev_angles = np.array(
         [q.resonator.operations["readout"].integration_weights_angle for q in node.namespace["qubits"]]
     )
-    if getattr(node.parameters, "update_integration_weights_angle", True):
-        fit = fit.assign({"iw_angle": (prev_angles + fit.iw_angle) % (2 * np.pi)})
-    else:
-        # Keep existing angle unchanged
+    if signal_source in ("IQ_abs", "I"):
+        # IQ_abs and I give no new phase information — keep the existing angle unchanged.
         fit = fit.assign({"iw_angle": ("qubit", prev_angles)})
+    else:
+        fit = fit.assign({"iw_angle": (prev_angles + fit.iw_angle) % (2 * np.pi)})
     fit.iw_angle.attrs = {"long_name": "integration weight angle", "units": "rad"}
 
     x180_length = np.array([q.xy.operations["x180"].length * 1e-9 for q in node.namespace["qubits"]])
@@ -146,9 +163,16 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
     freq_success = np.abs(res_freq - full_freq_offset) < node.parameters.frequency_span_in_mhz * 1e6
     fwhm_success = np.abs(fwhm) < node.parameters.frequency_span_in_mhz * 1e6
 
-    # Chi-square check (hard failure)
+    # Chi-square check (hard failure) — use the same signal that was fitted
     is_dip = getattr(node.parameters, "find_dip", False)
-    signal_for_chi2 = -fit.I_rot if is_dip else fit.I_rot
+    if signal_source == "IQ_abs":
+        signal_for_chi2 = fit.IQ_abs
+    elif signal_source == "I":
+        signal_for_chi2 = -fit.I if is_dip else fit.I
+    elif is_dip:
+        signal_for_chi2 = -fit.I_rot
+    else:
+        signal_for_chi2 = fit.I_rot
     chi2 = _compute_chi2_lorentzian(fit, signal_for_chi2)
     chi2_success = chi2 <= 2.0
 

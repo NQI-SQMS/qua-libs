@@ -14,6 +14,9 @@ class NodeSpecificParameters(RunnableParameters):
     """Minimum relative contrast for a dip to be accepted (fraction of baseline amplitude)."""
     lo_leakage_exclusion_mhz: float = 10.0
     """Exclude peaks within ±lo_leakage_exclusion_mhz of the LO frequency [MHz]."""
+    fit_on_phase: bool = False
+    """If True, use the phase (arctan) fit as the primary fit instead of the magnitude (Lorentzian dip) fit.
+    Useful when the magnitude response is featureless (e.g. deep dispersive regime or low SNR on amplitude)."""
 
 
 class Parameters(

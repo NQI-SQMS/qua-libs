@@ -120,11 +120,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         t = declare(int)
         n_st = declare_stream()
 
+        I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
         if node.parameters.use_state_discrimination:
             state = [declare(int) for _ in range(num_qubits)]
             state_st = [declare_stream() for _ in range(num_qubits)]
-        else:
-            I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
 
         for multiplexed_qubits in qubits.batch():
             for qubit in multiplexed_qubits.values():
@@ -159,12 +158,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         if node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
-
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                         # Thermalise cavity and qubit after each point.
                         sideband_drive.wait(therm_clk)
-                        qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
+                        qubit.xy.wait(2 * qubit.thermalization_time // 4)
 
                     align()
 

@@ -67,14 +67,21 @@ def custom_param(node: QualibrationNode[Parameters, Quam]):
 node.machine = Quam.load()
 
 
-def _get_sideband_drive(node):
-    """Return the sideband_drive channel for the cavity_transmon_pair whose
-    cavity_mode_name matches node.parameters.mode_name."""
+def _get_pair_components(node):
+    """Return (sideband_drive, qubit, cavity_mode) for the cavity_transmon_pair
+    whose cavity_mode_name matches node.parameters.mode_name."""
     mode_name = node.parameters.mode_name
     for pair in node.machine.cavity_transmon_pairs.values():
         if pair.cavity_mode_name == mode_name:
-            return pair.sideband_drive
-    raise KeyError(f"No cavity_transmon_pair with cavity_mode_name='{mode_name}'")
+            qubit = node.machine.qubits[pair.qubit_name]
+            cav_mode = next(
+                (getattr(cav, mode_name, None)
+                 for cav in node.machine.cavities.values()
+                 if getattr(cav, mode_name, None) is not None),
+                None,
+            )
+            return pair.sideband_drive, qubit, cav_mode
+    raise KeyError(f"No cavity_transmon_pair with cavity_mode_name='{node.parameters.mode_name}'")
 
 
 # %% {Create_QUA_program}
@@ -89,20 +96,23 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     step = node.parameters.frequency_step_in_mhz * u.MHz
     dfs = np.arange(-span // 2, +span // 2, step)
 
-    sideband_drive = _get_sideband_drive(node)
+    sideband_drive, pair_qubit, cav_mode = _get_pair_components(node)
     op = node.parameters.operation
     op_len = node.parameters.operation_len_in_ns
+
+    # Seed the sideband drive at 2*f_ge + anharmonicity - f_cavity (f0g1 transition).
+    # This also keeps the analysis x-axis correct since it uses sideband_drive.RF_frequency.
+    if cav_mode is not None:
+        sideband_drive.RF_frequency = (
+            2 * pair_qubit.xy.RF_frequency
+            + pair_qubit.anharmonicity
+            - cav_mode.cavity_mode_drive.RF_frequency
+        )
 
     # Cavity thermalization in clock cycles (computed once outside QUA loops).
     if node.parameters.cavity_thermalization_time_ns is not None:
         therm_clk = int(min(max(node.parameters.cavity_thermalization_time_ns // 4, 4), 2_500_000_000))
     else:
-        cav_mode = next(
-            (getattr(cav, node.parameters.mode_name, None)
-             for cav in node.machine.cavities.values()
-             if getattr(cav, node.parameters.mode_name, None) is not None),
-            None,
-        )
         if cav_mode is not None:
             therm_clk = int(min(max(
                 cav_mode.T1 * cav_mode.thermalization_time_factor * 1e9 / 4, 4
@@ -120,11 +130,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         f = declare(int)
         n_st = declare_stream()
 
+        I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
         if node.parameters.use_state_discrimination:
             state = [declare(int) for _ in range(num_qubits)]
             state_st = [declare_stream() for _ in range(num_qubits)]
-        else:
-            I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
 
         for multiplexed_qubits in qubits.batch():
             for qubit in multiplexed_qubits.values():
@@ -173,12 +182,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         if node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
-
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                         # Thermalise cavity and qubit after each point.
                         sideband_drive.wait(therm_clk)
-                        qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
+                        qubit.xy.wait(2 * qubit.thermalization_time // 4)
 
                     align()
 

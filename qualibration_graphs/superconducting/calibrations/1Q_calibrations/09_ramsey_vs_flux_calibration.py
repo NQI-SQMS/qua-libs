@@ -119,7 +119,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             for i, qubit in multiplexed_qubits.items():
                 qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                 assign(init_state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
             align()
             with for_(n, 0, n < n_avg, n + 1):
@@ -136,7 +136,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                 qubit.xy.play("x90")
                                 qubit.xy.frame_rotation_2pi(phi)
                                 qubit.xy.wait(t + 1)
-                                qubit.z.wait(qubit.xy.operations["x90"].length * u.ns)
+                                qubit.z.wait(qubit.xy.operations["x90"].length // 4)
                                 qubit.z.play(
                                     "const", amplitude_scale=flux / qubit.z.operations["const"].amplitude, duration=t
                                 )
@@ -149,7 +149,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             save(I[i], I_st[i])
                             save(Q[i], Q_st[i])
                             assign(current_state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                             assign(state[i], init_state[i] ^ current_state[i])
                             assign(init_state[i], current_state[i])
                             save(state[i], state_st[i])

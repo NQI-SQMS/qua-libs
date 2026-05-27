@@ -126,7 +126,7 @@ def create_qua_program(node: QualibrationNode[EfParameters, Quam]):
                 with for_(*from_array(a, amps)):
                     # Qubit initialization
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
+                        qubit.xy.wait(2 * qubit.thermalization_time // 4)
                     align()
                     for i, qubit in multiplexed_qubits.items():
                         # Set the XY channel to the |g> -> |e> transition (GE) intermediate frequency
@@ -158,7 +158,7 @@ def create_qua_program(node: QualibrationNode[EfParameters, Quam]):
                                 assign(diff[p], Math.abs(I[i] - qubit.resonator.gef_centers[p][0]) + Math.abs(Q[i] - qubit.resonator.gef_centers[p][1]))
                             assign(state[i], Math.argmin(diff))
                             save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                     align()
 
         with stream_processing():

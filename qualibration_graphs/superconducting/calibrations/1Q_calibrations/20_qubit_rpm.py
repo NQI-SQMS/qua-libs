@@ -93,7 +93,7 @@ def _make_rpm_program(qubits, amp_factors, num_qubits, n_avg, ef_op, u, start_fr
                 save(n, n_st)
                 with for_(*from_array(a, amp_factors)):
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
+                        qubit.xy.wait(2 * qubit.thermalization_time // 4)
 
                         if start_from_g:
                             # Prepare |e⟩ via ge_π
@@ -121,7 +121,7 @@ def _make_rpm_program(qubits, amp_factors, num_qubits, n_avg, ef_op, u, start_fr
                         save(Q[i], Q_st[i])
                         assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                         save(state[i], state_st[i])
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        qubit.resonator.wait(node.machine.depletion_time // 4)
 
                     align()
 

@@ -24,8 +24,9 @@ class NodeSpecificParameters(RunnableParameters):
     find_dip: bool = False
     """Set True for reflection readout where the qubit appears as a dip in I_rot (e.g. SRF setups)."""
     signal_source: str = "I_rot"
-    """Signal used for analysis and plotting: 'I_rot' (PCA-rotated quadrature) or 'IQ_abs' (magnitude).
-    When 'IQ_abs' is chosen the integration weight angle is NOT updated."""
+    """Signal used for analysis and plotting: 'I_rot' (PCA-rotated quadrature), 'I' (raw I quadrature,
+    no rotation), or 'IQ_abs' (magnitude). When 'IQ_abs' or 'I' is chosen the integration weight
+    angle is NOT updated (use 'I' when the angle was already calibrated by a previous node)."""
     update_iw_angle: bool = True
     """When False, skip updating integration_weights_angle in update_state even when signal_source='I_rot'.
     Set False in bringup graphs where the angle was already calibrated by qubit_spectroscopy_vs_power."""

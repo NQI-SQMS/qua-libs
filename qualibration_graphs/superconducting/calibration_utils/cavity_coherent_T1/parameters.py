@@ -1,4 +1,3 @@
-from pydantic import field_validator
 from typing import Literal, Optional
 
 from qualibrate import NodeParameters
@@ -9,8 +8,6 @@ from qualibration_libs.parameters import (
     IdleTimeNodeParameters,
 )
 
-_AMP_MAX = 2.0 - 2**-16  # QUA hardware limit
-
 
 class NodeSpecificParameters(RunnableParameters):
     num_shots: int = 1000
@@ -19,10 +16,10 @@ class NodeSpecificParameters(RunnableParameters):
     """Which cavity mode to probe: 'alice' or 'bob'."""
     cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
     """How to reset the cavity before each displacement.
-    'thermal'        — wait thermalization_time_factor × T1 (passive decay).
-    'active_sideband'— drive f0g1 π-pulses to actively remove photons; requires a
-                       calibrated f0g1_pi operation on the sideband_drive of the
-                       corresponding CavityTransmonPair."""
+    'thermal'         — wait thermalization_time_factor × T1 (passive decay).
+    'active_sideband' — drive f0g1 π-pulses to actively remove photons; requires a
+                        calibrated f0g1_pi operation on the sideband_drive of the
+                        corresponding CavityTransmonPair."""
     cavity_active_cooling_fock_n: int = 1
     """Starting Fock level for active sideband cooling (only used when
     cavity_reset_type='active_sideband').  Set to 1 for thermal state cooling."""
@@ -32,32 +29,33 @@ class NodeSpecificParameters(RunnableParameters):
     Set to a longer value (e.g. several ms) to ensure the cavity photon
     decoheres fully during each cooling step, at the cost of longer reset time.
     Must be a multiple of 4 ns."""
-    displacement_scale: float = 1.0
-    """Amplitude scale for the displacement pulse.
-    After node 30/32 calibration: scale=1 → 1 photon.  Use scale>1 for a
-    brighter initial coherent state (stronger signal at early times).
-    Must be in (-2, +2) — the QUA hardware limit is ±(2 - 2^-16)."""
+    displacement_alpha: float = 1.0
+    """Desired coherent-state amplitude α for the displacement pulse.
+    The actual QUA amplitude_scale is computed at runtime as
+        amplitude_scale = displacement_alpha / displacement_alpha_max
+    where displacement_alpha_max is read from the CavityTransmonPair in the
+    QuAM state (set by node 30/32 calibration).
+    displacement_alpha = 1 → |α|² = 1 mean photon after calibration.
+    The runtime check ensures amplitude_scale stays within the QUA hardware
+    limit ±(2 − 2^−16)."""
     delay_repeats: int = 1
     """Number of times to repeat the wait per point.  Extends the effective
     sweep range: total time = delay_repeats × t_per_rep × 4 ns.
     min/max_wait_time_in_ns define the *per-repeat* range, so the full sweep
     spans [min, delay_repeats × max] ns.  The x-axis always shows total time."""
+    subtract_baseline: bool = False
+    """If True, run a second sub-sequence WITHOUT the selective qubit π-pulse at every
+    time point and subtract its averaged IQ from the signal IQ before any
+    state-discrimination is applied.  This removes the time-dependent IQ offset caused
+    by cross-Kerr coupling between the cavity mode and the readout resonator (the
+    cross-Kerr shift changes as the cavity photon number decays during the T1 sweep).
+    If False, only the standard single-sequence protocol is executed."""
     use_state_discrimination: bool = True
     """True → measure qubit state. False → measure raw I quadrature."""
     normalize_plot: bool = False
     """When True and use_state_discrimination=False, normalize the plotted I signal
     to [0, 1] so the decay starts at 1 (full vacuum-state signal) and the baseline
     is 0.  Has no effect when use_state_discrimination=True."""
-
-    @field_validator("displacement_scale")
-    @classmethod
-    def _check_amp_scale(cls, v: float) -> float:
-        if abs(v) > _AMP_MAX:
-            raise ValueError(
-                f"displacement_scale={v} exceeds the QUA hardware limit "
-                f"±{_AMP_MAX:.6f} (2 - 2^-16). Use a value in (-2, +2)."
-            )
-        return v
 
 
 class Parameters(

@@ -111,7 +111,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         # Get the duration of the operation from the node parameters or the state
                         duration = operation_len if operation_len is not None else qubit.xy.operations[operation].length
                         # Wait for the qubit to thermalize (longer for proper |f> state thermalization)
-                        qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
+                        qubit.xy.wait(2 * qubit.thermalization_time // 4)
                         # Reset the qubit frequency
                         qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
                         # Drive the qubit to the excited state
@@ -136,7 +136,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         # readout the resonator
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                         # wait for the resonator to deplete
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        qubit.resonator.wait(node.machine.depletion_time // 4)
                         # save data
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
@@ -221,7 +221,7 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def plot_data(node: QualibrationNode[Parameters, Quam]):
     """Plot the raw and fitted data in specific figures whose shape is given by qubit.grid_location."""
-    fig_raw_fit = plot_raw_data_with_fit(node.results["ds_raw"], node.namespace["qubits"], node.results["ds_fit"], find_dip=node.parameters.find_dip)
+    fig_raw_fit = plot_raw_data_with_fit(node.results["ds_raw"], node.namespace["qubits"], node.results["ds_fit"], find_dip=node.parameters.find_dip, signal_source=node.parameters.signal_source)
     plt.show()
     # Store the generated figures
     node.results["figures"] = {
@@ -240,7 +240,7 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             # Shift anharmonicity by the found detuning: actual EF = f_ge + anharmonicity + relative_freq
             q.anharmonicity += node.results["fit_results"][q.name]["relative_freq"]
 
-            if node.parameters.update_integration_weights_angle:
+            if node.parameters.signal_source not in ("IQ_abs", "I") and node.parameters.update_integration_weights_angle:
                 q.resonator.operations["readout"].integration_weights_angle = (
                     node.results["fit_results"][q.name]["iw_angle"]
                 )

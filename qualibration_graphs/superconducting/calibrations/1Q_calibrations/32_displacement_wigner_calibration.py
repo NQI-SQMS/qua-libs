@@ -198,7 +198,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         if node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
                     align()
                     # --- Reverse displacement (cavity back toward vacuum) ---
@@ -270,11 +270,15 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
 # %% {Plot_data}
 @node.run_action(skip_if=node.parameters.simulate)
 def plot_data(node: QualibrationNode[Parameters, Quam]):
+    cavity_mode = node.namespace["cavity_mode"]
+    base_amp = float(cavity_mode.cavity_mode_drive.operations["displacement"].amplitude)
     fig = plot_wigner_1d(
         node.results["ds_raw"],
         node.namespace["qubits"],
         node.results["fit_results"],
         parity_time_ns=node.results.get("parity_time_ns", 0),
+        base_amplitude=base_amp,
+        current_alpha_max=node.namespace.get("current_alpha_max", 1.0),
     )
     plt.show()
     node.results["figures"] = {"wigner_1d": fig}

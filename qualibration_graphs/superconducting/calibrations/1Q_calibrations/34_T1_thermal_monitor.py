@@ -141,6 +141,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     num_qubits = len(qubits)
     n_avg  = node.parameters.num_shots
     ef_op  = node.parameters.ef_operation
+    x180_op = node.parameters.x180_operation
 
     # ── T1 sweep axes ────────────────────────────────────────────────────────
     t1_idle_times = get_idle_times_in_clock_cycles(node.parameters)
@@ -262,6 +263,16 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     node.namespace["qua_program_t1"] = t1_prog
 
     # ── Ramsey QUA program ───────────────────────────────────────────────────
+    # Per-qubit IF correction derived from the chosen pulse's detuning field (compile-time)
+    ramsey_corrections = {}
+    if node.parameters.correct_with_pulse_detuning:
+        for qubit in qubits:
+            pulse = qubit.xy.operations.get(x180_op)
+            ramsey_corrections[qubit.name] = int(getattr(pulse, "detuning", 0)) if pulse is not None else 0
+    else:
+        for qubit in qubits:
+            ramsey_corrections[qubit.name] = 0
+
     with program() as ramsey_prog:
         I, I_st, Q, Q_st, n, n_st = node.machine.declare_qua_variables()
         idle_time     = declare(int)
@@ -276,6 +287,14 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             for qubit in multiplexed_qubits.values():
                 node.machine.initialize_qpu(target=qubit)
             align()
+
+            # Apply element IF correction once before all averages (compile-time constant)
+            for qubit in multiplexed_qubits.values():
+                if ramsey_corrections[qubit.name] != 0:
+                    update_frequency(
+                        qubit.xy.name,
+                        int(qubit.xy.intermediate_frequency) + ramsey_corrections[qubit.name],
+                    )
 
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
@@ -299,10 +318,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                 assign(phi[i], Cast.mul_fixed_by_int(detuning * 1e-9, 4 * idle_time))
                             with else_():
                                 assign(phi[i], Cast.mul_fixed_by_int(-detuning * 1e-9, 4 * idle_time))
-                            qubit.xy.play("x90")
+                            qubit.xy.play(x180_op, amplitude_scale=0.5)
                             qubit.xy.frame_rotation_2pi(phi[i])
                             qubit.xy.wait(idle_time)
-                            qubit.xy.play("x90")
+                            qubit.xy.play(x180_op, amplitude_scale=0.5)
                         align()
 
                         # --- Readout ---
@@ -315,6 +334,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                 save(state[i], state_st[i])
                             qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                         align()
+
+            # Restore element IF to nominal value after all averages
+            for qubit in multiplexed_qubits.values():
+                if ramsey_corrections[qubit.name] != 0:
+                    update_frequency(qubit.xy.name, int(qubit.xy.intermediate_frequency))
 
         with stream_processing():
             n_st.save("n")
@@ -503,12 +527,25 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
             log_callable=node.log,
         )
 
-    node.namespace["iter_results"]  = iter_results
-    node.namespace["raw_t1_list"]   = raw_t1_list
-    node.namespace["raw_ramsey_list"] = raw_ramsey_list
-    node.namespace["raw_echo_list"] = raw_echo_list
-    node.namespace["raw_g_list"]    = raw_g_list
-    node.namespace["raw_e_list"]    = raw_e_list
+        # ── Checkpoint: persist all data collected so far ────────────────────
+        # node.namespace is kept in sync so iter_results survives a crash in
+        # interactive mode (accessible via node.namespace["iter_results"]).
+        node.namespace["iter_results"]    = iter_results
+        node.namespace["raw_t1_list"]     = raw_t1_list
+        node.namespace["raw_ramsey_list"] = raw_ramsey_list
+        node.namespace["raw_echo_list"]   = raw_echo_list
+        node.namespace["raw_g_list"]      = raw_g_list
+        node.namespace["raw_e_list"]      = raw_e_list
+
+        # Write a single overwriting .h5 checkpoint so data survives a crash.
+        # NOTE: node.save() is intentionally NOT called here — each call would
+        # create a new, incrementing snapshot in the qualibrate database.
+        # The official node.save() remains in analyse_data.
+        _partial_path = (
+            node._get_storage_manager().data_handler.root_data_folder
+            / f"partial_{node.name}.h5"
+        )
+        build_dataset(iter_results).to_netcdf(_partial_path)
 
 
 # %% {Load_data}
@@ -542,17 +579,24 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
         if raw:
             node.results[key] = xr.concat(raw, dim="iteration")
 
+    # Save immediately so all experimental data is on disk before plotting.
+    # This guarantees no data loss if plot_data raises an exception.
+    node.save()
+
 
 # %% {Plot_data}
 @node.run_action(skip_if=node.parameters.simulate)
 def plot_data(node: QualibrationNode[Parameters, Quam]):
     """Plot T1, T2*, T2 echo, qubit frequency, and thermal population time traces."""
-    fig = plot_T1_thermal_monitor(
-        node.namespace["iter_results"],
-        node.namespace["qubits"],
-    )
-    plt.show()
-    node.results["figures"] = {"monitor": fig}
+    try:
+        fig = plot_T1_thermal_monitor(
+            node.namespace["iter_results"],
+            node.namespace["qubits"],
+        )
+        plt.show()
+        node.results["figures"] = {"monitor": fig}
+    except Exception as e:
+        node.log(f"WARNING: plot_data failed ({e}); data already saved by analyse_data.")
 
 
 # %% {Save_results}

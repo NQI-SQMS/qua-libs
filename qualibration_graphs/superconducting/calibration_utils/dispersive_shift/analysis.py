@@ -31,7 +31,9 @@ class FitParameters:
     f_e: float
     """Resonator frequency when qubit is in |e⟩ [Hz]."""
     chi_hz: float
-    """Dispersive shift chi = f_e - f_g [Hz]."""
+    """Dispersive shift chi = f_e - f_g [Hz] (full shift, signed).
+    For the qubit–readout resonator coupling this is the cavity pull when
+    the qubit transitions from |g⟩ to |e⟩."""
     f_optimal: float
     """Optimal readout frequency (midpoint of maximum contrast) [Hz]."""
     success: bool
@@ -65,6 +67,10 @@ class FitParameters:
     """Phase-fit dip center detuning for |g⟩ [Hz]."""
     center_phase_e_hz: float = float("nan")
     """Phase-fit dip center detuning for |e⟩ [Hz]."""
+    chi2_g: float = float("nan")
+    """Reduced chi-squared of Lorentzian amplitude fit for |g⟩: SS_res / ((N-4)*amp²)."""
+    chi2_e: float = float("nan")
+    """Reduced chi-squared of Lorentzian amplitude fit for |e⟩: SS_res / ((N-4)*amp²)."""
 
 
 def _fit_lorentzian_dip(x: np.ndarray, y: np.ndarray):
@@ -104,6 +110,42 @@ def _fit_lorentzian_dip(x: np.ndarray, y: np.ndarray):
         return float(center), float(abs(kappa)), float(amplitude), float(offset), True
     except Exception:
         return center0, kappa0, amplitude0, offset0, False
+
+
+def _compute_lorentzian_chi2(
+    x: np.ndarray, y: np.ndarray, center: float, kappa: float, amplitude: float, offset: float
+) -> float:
+    """Reduced chi-squared for a Lorentzian dip fit: SS_res / ((N-4)*amp²).
+
+    Returns inf when amplitude <= 0 or N <= 4 (fit cannot be evaluated).
+    """
+    N = len(x)
+    if N <= 4 or amplitude <= 0:
+        return float("inf")
+    y_fit = lorentzian_dip(x, amplitude, center, kappa, offset)
+    SS_res = float(np.sum((y - y_fit) ** 2))
+    return SS_res / ((N - 4) * amplitude ** 2)
+
+
+def _phase_initial_guesses(x: np.ndarray, phase: np.ndarray):
+    """Estimate center and kappa from phase data for the arctan fit.
+
+    Uses the peak of |dφ/dx| as the center and the HWHM of that peak as kappa.
+    Falls back to span/8 for kappa if the width cannot be resolved.
+    """
+    dphase = np.abs(np.gradient(phase, x))
+    i_max = int(np.argmax(dphase))
+    center0 = float(x[i_max])
+    half_max = 0.5 * dphase[i_max]
+    try:
+        left_idx = np.where(dphase[:i_max + 1] < half_max)[0]
+        right_idx = np.where(dphase[i_max:] < half_max)[0]
+        left = float(x[left_idx[-1]]) if len(left_idx) else float(x[0])
+        right = float(x[i_max + right_idx[0]]) if len(right_idx) else float(x[-1])
+        kappa0 = max(0.5 * abs(right - left), float(x[1] - x[0]))
+    except (IndexError, ValueError):
+        kappa0 = float((x[-1] - x[0]) / 8)
+    return center0, kappa0
 
 
 def _fit_phase(x: np.ndarray, phase: np.ndarray, center0: float, kappa0: float):
@@ -177,6 +219,7 @@ def fit_raw_data(
     fit_results : dict[str, FitParameters]
     """
     span_hz = node.parameters.frequency_span_in_mhz * 1e6
+    chi2_threshold = getattr(node.parameters, "chi2_threshold", 3.0)
     fit_results = {}
 
     for q_obj in node.namespace["qubits"]:
@@ -194,20 +237,18 @@ def fit_raw_data(
         cg, kg, ag, og, ok_g = _fit_lorentzian_dip(dfs, amp_g)
         ce, ke, ae, oe, ok_e = _fit_lorentzian_dip(dfs, amp_e)
 
-        f_g = rr_freq + cg
-        f_e = rr_freq + ce
+        # Chi-squared quality check for amplitude fits
+        chi2_g = _compute_lorentzian_chi2(dfs, amp_g, cg, kg, ag, og) if ok_g else float("inf")
+        chi2_e = _compute_lorentzian_chi2(dfs, amp_e, ce, ke, ae, oe) if ok_e else float("inf")
+        amp_ok_g = ok_g and chi2_g <= chi2_threshold
+        amp_ok_e = ok_e and chi2_e <= chi2_threshold
 
-        success_g = ok_g and np.isfinite(cg) and abs(cg) < span_hz
-        success_e = ok_e and np.isfinite(ce) and abs(ce) < span_hz
-        success = success_g and success_e
-
-        chi_hz = f_e - f_g if success else float("nan")
-        f_optimal = 0.5 * (f_g + f_e) if success else rr_freq
-
-        # Phase fit: φ(ω) = φ₀ − arctan(2·(ω − ωr) / κ)
+        # Phase fit: φ(ω) = φ₀ − arctan(2·(ω − ωr) / κ), always run as potential fallback
         phi0_g = phi0_e = float("nan")
         kappa_ph_g = kappa_ph_e = float("nan")
         center_ph_g = center_ph_e = float("nan")
+        ok_ph_g = ok_ph_e = False
+        ph_g = ph_e = None
         if "phase" in ds.data_vars:
             if "qubit_state" in ds.dims:
                 ph_g = ds.phase.sel(qubit=q, qubit_state=0).values
@@ -215,10 +256,36 @@ def fit_raw_data(
             else:
                 ph_g = ds.phase_g.sel(qubit=q).values if "phase_g" in ds.data_vars else None
                 ph_e = ds.phase_e.sel(qubit=q).values if "phase_e" in ds.data_vars else None
-            if ph_g is not None:
-                phi0_g, center_ph_g, kappa_ph_g, _ = _fit_phase(dfs, ph_g, cg, kg)
-            if ph_e is not None:
-                phi0_e, center_ph_e, kappa_ph_e, _ = _fit_phase(dfs, ph_e, ce, ke)
+        if ph_g is not None:
+            c0_g, k0_g = (cg, kg) if amp_ok_g else _phase_initial_guesses(dfs, ph_g)
+            phi0_g, center_ph_g, kappa_ph_g, ok_ph_g = _fit_phase(dfs, ph_g, c0_g, k0_g)
+        if ph_e is not None:
+            c0_e, k0_e = (ce, ke) if amp_ok_e else _phase_initial_guesses(dfs, ph_e)
+            phi0_e, center_ph_e, kappa_ph_e, ok_ph_e = _fit_phase(dfs, ph_e, c0_e, k0_e)
+
+        # Phase fallback: use phase-fit center when amplitude fit is poor
+        if not amp_ok_g and ok_ph_g and np.isfinite(center_ph_g) and abs(center_ph_g) < span_hz:
+            node.log(
+                f"[{q}] |g⟩: amplitude fit poor (chi2={chi2_g:.2f} > {chi2_threshold}); "
+                f"using phase fit center {rr_freq + center_ph_g:.6e} Hz"
+            )
+            cg = center_ph_g
+        if not amp_ok_e and ok_ph_e and np.isfinite(center_ph_e) and abs(center_ph_e) < span_hz:
+            node.log(
+                f"[{q}] |e⟩: amplitude fit poor (chi2={chi2_e:.2f} > {chi2_threshold}); "
+                f"using phase fit center {rr_freq + center_ph_e:.6e} Hz"
+            )
+            ce = center_ph_e
+
+        f_g = rr_freq + cg
+        f_e = rr_freq + ce
+
+        success_g = (amp_ok_g or ok_ph_g) and np.isfinite(cg) and abs(cg) < span_hz
+        success_e = (amp_ok_e or ok_ph_e) and np.isfinite(ce) and abs(ce) < span_hz
+        success = success_g and success_e
+
+        chi_hz = f_e - f_g if success else float("nan")
+        f_optimal = 0.5 * (f_g + f_e) if success else rr_freq
 
         fit_results[q] = FitParameters(
             f_g=f_g,
@@ -240,6 +307,8 @@ def fit_raw_data(
             kappa_phase_e_hz=kappa_ph_e,
             center_phase_g_hz=center_ph_g,
             center_phase_e_hz=center_ph_e,
+            chi2_g=chi2_g if np.isfinite(chi2_g) else float("nan"),
+            chi2_e=chi2_e if np.isfinite(chi2_e) else float("nan"),
         )
 
     return ds, fit_results

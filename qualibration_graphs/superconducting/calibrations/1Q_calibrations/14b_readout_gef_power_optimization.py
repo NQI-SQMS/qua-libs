@@ -110,31 +110,31 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 with for_(*from_array(a, amps)):
                     # ── |g⟩ readout ──────────────────────────────────────────
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.wait(2 * qubit.thermalization_time * u.ns)
+                        qubit.wait(2 * qubit.thermalization_time // 4)
                     align()
                     for i, qubit in multiplexed_qubits.items():
                         qubit.resonator.measure(operation, qua_vars=(I_g[i], Q_g[i]), amplitude_scale=a)
-                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                         save(I_g[i], I_g_st[i])
                         save(Q_g[i], Q_g_st[i])
                     align()
 
                     # ── |e⟩ readout ──────────────────────────────────────────
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.wait(2 * qubit.thermalization_time * u.ns)
+                        qubit.wait(2 * qubit.thermalization_time // 4)
                     align()
                     for i, qubit in multiplexed_qubits.items():
                         qubit.xy.play("x180")
                         qubit.align()
                         qubit.resonator.measure(operation, qua_vars=(I_e[i], Q_e[i]), amplitude_scale=a)
-                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                         save(I_e[i], I_e_st[i])
                         save(Q_e[i], Q_e_st[i])
                     align()
 
                     # ── |f⟩ readout ──────────────────────────────────────────
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
+                        qubit.xy.wait(2 * qubit.thermalization_time // 4)
                     align()
                     for i, qubit in multiplexed_qubits.items():
                         qubit.xy.play("x180")
@@ -143,7 +143,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         update_frequency(qubit.xy.name, qubit.xy.intermediate_frequency)
                         qubit.align()
                         qubit.resonator.measure(operation, qua_vars=(I_f[i], Q_f[i]), amplitude_scale=a)
-                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                         save(I_f[i], I_f_st[i])
                         save(Q_f[i], Q_f_st[i])
 

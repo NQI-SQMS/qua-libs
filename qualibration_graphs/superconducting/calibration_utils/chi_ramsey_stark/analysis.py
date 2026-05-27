@@ -4,17 +4,21 @@ Physics recap
 -------------
 In the dispersive regime, the qubit frequency is shifted by
 
-    Δω_q = 2χ n̄_ss
+    Δω_q = chi · n̄_ss
 
-when the coupled storage cavity is driven to a steady-state population of
-n̄_ss photons.  For a CW drive at amplitude A (dimensionless QUA scale),
-n̄_ss ∝ A².  By fitting the Ramsey oscillation frequency f_R(A) for several
-drive amplitudes and forming Δf(A) = f_R(A) - f_R(0), we extract:
+where chi = full per-photon qubit frequency shift [Hz] (negative for typical
+transmon-cavity systems).  For a CW drive at amplitude A (dimensionless QUA
+scale), n̄_ss ∝ A².  By fitting the Ramsey oscillation frequency f_R(A) for
+several drive amplitudes and forming Δf(A) = f_R(A) - f_R(0), we extract:
 
-    Δf = (2χ · dn̄_ss/dA²) · A²   =>   slope = 2χ · (dn̄_ss/dA²)
+    Δf = (chi · dn̄_ss/dA²) · A²   =>   slope = chi · (dn̄_ss/dA²)
 
 If displacement_k is calibrated (n̄_pulsed = displacement_k · A²), we use it
-as a proxy for (dn̄_ss/dA²) to obtain χ in absolute units.
+as a proxy for (dn̄_ss/dA²) to obtain chi in absolute units:
+
+    chi = slope / displacement_k
+
+chi is negative when the slope is negative (qubit shifts down with more photons).
 """
 from __future__ import annotations
 
@@ -113,9 +117,10 @@ class RamseyStarkFit:
     """Frequency shift Δf(A) = f_R(A) - f_R(0) for each amplitude [Hz]."""
     chi_slope_hz_per_amp2: float
     """Slope of the Δf vs A² linear fit [Hz / (amp scale)²].
-    Equals 2χ · (dn̄_ss/dA²) in the dispersive model."""
+    Equals chi · (dn̄_ss/dA²) in the dispersive model (chi < 0 → slope < 0)."""
     chi_hz: Optional[float]
-    """Dispersive shift χ [Hz] extracted via displacement_k.
+    """Full per-photon qubit frequency shift [Hz] extracted via displacement_k.
+    Negative for typical transmon-cavity systems.
     None when displacement_k is not calibrated in the machine state."""
     success: bool
     """True when the Ramsey fits and the χ slope fit all converged."""
@@ -240,9 +245,10 @@ def fit_raw_data(dataset, node) -> Tuple[object, Dict[str, RamseyStarkFit]]:
                 success = True
 
                 if displacement_k is not None:
-                    # χ = slope / (2 × displacement_k)
+                    # chi = slope / displacement_k (full per-photon shift, signed)
                     # where displacement_k ~ dn̄/dA² (approx, pulsed calibration)
-                    chi_hz = chi_slope / (2.0 * displacement_k)
+                    # chi < 0 when slope < 0 (qubit frequency decreases with photons)
+                    chi_hz = chi_slope / displacement_k
             except Exception as exc:
                 logger.warning("Chi slope fit failed for %s: %s", qubit.name, exc)
 
@@ -278,11 +284,11 @@ def log_fitted_results(
         )
         if res.chi_hz is not None:
             log_callable(
-                f"{qname}: χ = {res.chi_hz / 1e6:.3f} MHz  "
-                f"(via displacement_k)"
+                f"{qname}: chi = {res.chi_hz / 1e6:.3f} MHz  "
+                f"(full per-photon shift, via displacement_k)"
             )
         else:
             log_callable(
-                f"{qname}: χ not extracted — displacement_k not yet calibrated. "
+                f"{qname}: chi not extracted — displacement_k not yet calibrated. "
                 f"Raw slope = {slope_mhz:.3f} MHz/A²"
             )

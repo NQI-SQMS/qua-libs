@@ -29,10 +29,12 @@ from calibration_utils.cavity_coherent_T1 import (
 
 logger = logging.getLogger(__name__)
 
+_AMP_MAX = 2.0 - 2**-16  # QUA hardware limit
+
 
 # %% {Node initialisation}
 description = """
-        CAVITY COHERENT T1 (33)
+        CAVITY COHERENT T1 (23)
 
 Measures the energy relaxation time T1 of a selected cavity mode by preparing
 a coherent state |α⟩ and probing the vacuum-state population with a selective
@@ -40,29 +42,35 @@ qubit π-pulse.
 
 Sequence (per wait time t):
   1. Thermalize cavity (wait ≥ 5×T1) and reset qubit.
-  2. Apply displacement pulse at amplitude_scale = displacement_scale.
+  2. Apply displacement pulse: amplitude_scale = displacement_alpha / displacement_alpha_max.
   3. Wait for total time t = delay_repeats × t_per_rep.
   4. Apply selective_x180 on qubit — flips qubit only when cavity is in |0⟩.
   5. Measure qubit state.
 
 The measured signal is:
-    P_e(t) = A · exp(−n̄₀ · exp(−t / T1)) + offset
+    P_e(t) = A · exp(−|α₀|² · exp(−t / T1)) + offset
 
-where n̄₀ = displacement_scale² and T1 is the cavity photon lifetime.
+where |α₀|² = displacement_alpha² and T1 is the cavity photon lifetime.
+
+Fitting extracts T1 and |α₀|².  The dataset is augmented with the inferred
+photon-number decay |α(t)|² = −ln((P_e − offset) / A), plotted as a simple
+exponential: |α₀|² · exp(−t / T1).
 
 Parameters:
-  - mode_name:          Cavity mode to probe ('alice' or 'bob').
-  - displacement_scale: Amplitude scale of the displacement pulse.
-                        After node 32 calibration: scale=1 → 1 photon.
-  - t_start_ns / t_end_ns / t_num_points: logarithmic time sweep range.
-  - delay_repeats:      Multiply effective wait time to extend range.
+  - mode_name:           Cavity mode to probe ('alice' or 'bob').
+  - displacement_alpha:  Desired coherent-state amplitude α.
+                         amplitude_scale = displacement_alpha / displacement_alpha_max
+                         (displacement_alpha_max read from CavityTransmonPair QuAM state).
+                         After node 30/32 calibration: displacement_alpha=1 → 1 photon.
+  - min/max_wait_time_in_ns / wait_time_num_points: time sweep range.
+  - delay_repeats:       Multiply effective wait time to extend range.
 
 State updates:
   - cavity_mode.T1  (in seconds)
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="23_cavity_coherent_T1",
+    name="23_cavity_mode_coherent_T1",
     description=description,
     parameters=Parameters(),
 )
@@ -71,10 +79,10 @@ node = QualibrationNode[Parameters, Quam](
 @node.run_action(skip_if=node.modes.external)
 def custom_param(node: QualibrationNode[Parameters, Quam]):
     # node.parameters.mode_name = "alice"
-    # node.parameters.displacement_scale = 2.0
-    # node.parameters.t_start_ns = 16
-    # node.parameters.t_end_ns = 5_000_000
-    # node.parameters.t_num_points = 51
+    # node.parameters.displacement_alpha = 1.0
+    # node.parameters.min_wait_time_in_ns = 16
+    # node.parameters.max_wait_time_in_ns = 5_000_000
+    # node.parameters.wait_time_num_points = 51
     # node.parameters.delay_repeats = 1
     # node.parameters.num_shots = 1000
     pass
@@ -104,7 +112,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     cavity_mode = _get_cavity_mode(node)
     node.namespace["cavity_mode"] = cavity_mode
 
-    # Resolve sideband_drive for active cavity cooling (used only if requested)
+    # Resolve sideband_drive and displacement_alpha_max from the QuAM state
     mode_name = node.parameters.mode_name
     sideband_drive = None
     alpha_max = 1.0
@@ -118,6 +126,20 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             break
     node.namespace["sideband_drive"] = sideband_drive
     node.namespace["alpha_max"] = alpha_max
+
+    # Compute and validate the QUA amplitude_scale
+    amplitude_scale = node.parameters.displacement_alpha / alpha_max
+    if abs(amplitude_scale) > _AMP_MAX:
+        raise ValueError(
+            f"displacement_alpha={node.parameters.displacement_alpha} / "
+            f"alpha_max={alpha_max} = {amplitude_scale:.4f} exceeds the QUA "
+            f"hardware limit ±{_AMP_MAX:.6f}.  Reduce displacement_alpha."
+        )
+    node.namespace["amplitude_scale"] = amplitude_scale
+    node.log(
+        f"Displacement: alpha={node.parameters.displacement_alpha}, "
+        f"alpha_max={alpha_max}, amplitude_scale={amplitude_scale:.4f}"
+    )
 
     # ---- Time sweep (log or linear, via IdleTimeNodeParameters) --------------
     # get_idle_times_in_clock_cycles returns clock cycles for the per-repeat wait.
@@ -141,11 +163,24 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         ),
     }
 
+    subtract_baseline = node.parameters.subtract_baseline
+
     with program() as node.namespace["qua_program"]:
         I, I_st, Q, Q_st, n, n_st = node.machine.declare_qua_variables()
         t = declare(int)  # per-repeat clock cycles (arbitrary array → for_each_)
 
-        if node.parameters.use_state_discrimination:
+        if subtract_baseline:
+            I_base = [declare(fixed) for _ in range(num_qubits)]
+            Q_base = [declare(fixed) for _ in range(num_qubits)]
+            I_base_st = [declare_stream() for _ in range(num_qubits)]
+            Q_base_st = [declare_stream() for _ in range(num_qubits)]
+            # When subtracting the baseline, state discrimination cannot be computed
+            # per-shot inside QUA: the threshold must be applied to
+            # (I_signal - I_baseline), but those come from separate shots and are
+            # only both available after averaging.  State discrimination is therefore
+            # deferred to Python (process_raw_dataset).
+
+        if not subtract_baseline and node.parameters.use_state_discrimination:
             state = [declare(int) for _ in range(num_qubits)]
             state_st = [declare_stream() for _ in range(num_qubits)]
 
@@ -157,6 +192,58 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 save(n, n_st)
                 with for_each_(t, t_per_rep_clk.tolist()):
 
+                    # ============================================================
+                    # PART 1 — BASELINE measurement (only when subtract_baseline=True)
+                    # ============================================================
+                    # Purpose: capture the bare readout-resonator IQ response at each
+                    # wait time WITHOUT any qubit drive.  The cavity-resonator cross-Kerr
+                    # coupling shifts the resonator IQ as a function of photon number,
+                    # so this baseline is time-dependent and must be measured
+                    # independently at every point.
+                    if subtract_baseline:
+                        sideband_drive = node.namespace["sideband_drive"]
+                        for i, qubit in multiplexed_qubits.items():
+                            cavity_mode.reset(
+                                node.parameters.cavity_reset_type,
+                                node.parameters.simulate,
+                                log_callable=node.log,
+                                sideband_drive=sideband_drive,
+                                qubit_thermalization_time=qubit.thermalization_time,
+                                fock_n=node.parameters.cavity_active_cooling_fock_n,
+                                f0g1_pulse_duration_ns=node.parameters.f0g1_pulse_duration_ns,
+                            )
+                            qubit.reset(
+                                node.parameters.reset_type,
+                                node.parameters.simulate,
+                                log_callable=node.log,
+                            )
+
+                        align()
+                        cavity_mode.cavity_mode_drive.play(
+                            "displacement",
+                            amplitude_scale=node.namespace["amplitude_scale"],
+                        )
+
+                        # Wait for the same duration as the signal sequence so the
+                        # cross-Kerr environment is identical in both sub-sequences.
+                        align()
+                        for _ in range(delay_repeats):
+                            for i, qubit in multiplexed_qubits.items():
+                                qubit.xy.wait(t)
+
+                        # NO selective π-pulse — qubit stays in |g⟩.
+                        # Measure baseline IQ (cross-Kerr shift only, no vacuum signal).
+                        align()
+                        for i, qubit in multiplexed_qubits.items():
+                            qubit.resonator.measure("readout", qua_vars=(I_base[i], Q_base[i]))
+                            save(I_base[i], I_base_st[i])
+                            save(Q_base[i], Q_base_st[i])
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                        align()
+
+                    # ============================================================
+                    # PART 2 — SIGNAL measurement (full protocol, WITH π-pulse)
+                    # ============================================================
                     # --- Reset cavity and qubit BEFORE displacement ---
                     sideband_drive = node.namespace["sideband_drive"]
                     for i, qubit in multiplexed_qubits.items():
@@ -176,11 +263,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         )
 
                     # --- Displace the cavity ---
+                    # amplitude_scale = displacement_alpha / alpha_max
+                    # so the actual coherent amplitude is displacement_alpha.
                     # align() with no args includes cavity_mode_drive, which is not part of qubit.align().
                     align()
                     cavity_mode.cavity_mode_drive.play(
                         "displacement",
-                        amplitude_scale=node.parameters.displacement_scale / node.namespace["alpha_max"],
+                        amplitude_scale=node.namespace["amplitude_scale"],
                     )
 
                     # --- Wait for decay (delay_repeats × t) ---
@@ -200,10 +289,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
-                        if node.parameters.use_state_discrimination:
+                        if not subtract_baseline and node.parameters.use_state_discrimination:
                             assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                             save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                     align()
 
         with stream_processing():
@@ -211,7 +300,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             for i in range(num_qubits):
                 I_st[i].buffer(len(t_per_rep_clk)).average().save(f"I{i + 1}")
                 Q_st[i].buffer(len(t_per_rep_clk)).average().save(f"Q{i + 1}")
-                if node.parameters.use_state_discrimination:
+                if subtract_baseline:
+                    # Named Ib{i+1} / Qb{i+1} so XarrayDataFetcher groups them into
+                    # dataset variables 'Ib' and 'Qb', stacked along the qubit axis.
+                    I_base_st[i].buffer(len(t_per_rep_clk)).average().save(f"Ib{i + 1}")
+                    Q_base_st[i].buffer(len(t_per_rep_clk)).average().save(f"Qb{i + 1}")
+                elif node.parameters.use_state_discrimination:
                     state_st[i].buffer(len(t_per_rep_clk)).average().save(f"state{i + 1}")
 
 
@@ -271,7 +365,7 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def plot_data(node: QualibrationNode[Parameters, Quam]):
     fig = plot_coherent_T1(
-        node.results["ds_raw"],
+        node.results["ds_fit"],
         node.results["fit_results"],
         mode_name=node.parameters.mode_name,
         normalize_plot=node.parameters.normalize_plot,

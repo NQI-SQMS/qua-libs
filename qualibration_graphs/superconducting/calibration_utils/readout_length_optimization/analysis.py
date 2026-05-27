@@ -30,7 +30,7 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
         status = "SUCCESS!" if r["success"] else "FAIL!"
         log_callable(
             f"Readout length for qubit {q}: optimal = {r['optimal_readout_length_ns']} ns, "
-            f"fidelity = {100 * r['optimal_fidelity']:.1f}% --> {status}"
+            f"fidelity = {r['optimal_fidelity']:.1f}% --> {status}"
         )
 
 
@@ -66,11 +66,25 @@ def fit_raw_data(
         n_divisions = Ig.shape[1]
         fidelities = []
 
+        # BUG FIX: demod.accumulated returns per-chunk partial integrals — element [d]
+        # contains only the IQ signal integrated over the d-th time window, NOT from t=0.
+        # Without cumsum, the discriminator at step d would see a single narrow slice of
+        # the cavity signal rather than the total accumulated signal up to that point.
+        # For a slow cavity (e.g. SRF qubits) this caused the algorithm to pick a late
+        # chunk with high per-window SNR instead of the true optimal integration length.
+        # Fix: cumsum along the division axis so that index d represents the total
+        # integrated IQ signal from t=0 to t=(d+1)*division_length_ns.
+        Ig_cum = np.cumsum(Ig, axis=1)
+        Qg_cum = np.cumsum(Qg, axis=1)
+        Ie_cum = np.cumsum(Ie, axis=1)
+        Qe_cum = np.cumsum(Qe, axis=1)
+
         for d in range(n_divisions):
             # two_state_discriminator returns: angle, threshold, fidelity, gg, ge, eg, ee
+            # Note: fidelity is returned in percent [0, 100], not as a fraction [0, 1].
             try:
                 _, _, fidelity, *_ = two_state_discriminator(
-                    Ig[:, d], Qg[:, d], Ie[:, d], Qe[:, d], b_print=False, b_plot=False
+                    Ig_cum[:, d], Qg_cum[:, d], Ie_cum[:, d], Qe_cum[:, d], b_print=False, b_plot=False
                 )
                 fidelities.append(float(fidelity))
             except Exception:

@@ -95,9 +95,8 @@ class ParityTimeFit:
 
     chi_eff_hz: float
     """Per-photon qubit frequency shift [Hz] extracted from the FFT peak.
-    This equals the PNRS peak spacing (n=0→1) and is 2× the Hamiltonian
-    coupling pair.chi (i.e. chi_eff_hz = 2 · pair.chi · 2π in angular units).
-    Use chi_eff_hz / 2 to update pair.chi."""
+    This equals the PNRS peak spacing (n=0→1).
+    Use -chi_eff_hz to update pair.chi (full shift, negative convention)."""
 
     amplitude: float
     """FFT-estimated oscillation amplitude."""
@@ -190,7 +189,7 @@ def fit_raw_data(
             parity_time_s = 1.0 / (2.0 * freq_hz)
             message = (
                 f"PNRS spacing/(2π) = {freq_hz / 1e3:.1f} kHz  "
-                f"→  pair.chi = {freq_hz / 2e3:.1f} kHz  "
+                f"→  pair.chi = {-freq_hz / 1e3:.1f} kHz  "
                 f"→  τ_parity = {parity_time_s * 1e9:.0f} ns"
             )
             fit_results[qubit.name] = ParityTimeFit(
@@ -227,6 +226,6 @@ def log_fitted_results(
             continue
         log_callable(
             f"{qname}: PNRS spacing/(2π) = {res.chi_eff_hz / 1e3:.2f} kHz  |  "
-            f"pair.chi/(2π) = {res.chi_eff_hz / 2e3:.2f} kHz  |  "
+            f"pair.chi = {-res.chi_eff_hz / 1e3:.2f} kHz  |  "
             f"τ_parity = {res.parity_time_s * 1e9:.0f} ns"
         )

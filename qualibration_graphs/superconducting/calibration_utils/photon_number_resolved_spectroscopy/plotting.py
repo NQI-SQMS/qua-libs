@@ -29,7 +29,6 @@ def plot_raw_data_with_fit(
     qubits,
     fit_results: Optional[Dict] = None,
     mode_name: str = "alice",
-    displacement_scale: float = 1.0,
     displacement_alpha: float = 1.0,
     normalize_plot: bool = False,
 ) -> Figure:
@@ -140,10 +139,9 @@ def plot_raw_data_with_fit(
         ax_pn.set_ylim(0, 1.1)
         ax_pn.grid(True, alpha=0.3, axis="y")
 
-    actual_alpha = displacement_scale * displacement_alpha
     fig.suptitle(
         f"Photon Number Resolved Spectroscopy — {mode_name}  "
-        f"[scale={displacement_scale:.2f} × \u03b1={displacement_alpha:.1f} = {actual_alpha:.2f}]",
+        f"[\u03b1={displacement_alpha:.2f}]",
         fontsize=11,
     )
     fig.tight_layout()

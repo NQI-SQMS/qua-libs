@@ -114,7 +114,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         # Qubit initialization
                         for i, qubit in multiplexed_qubits.items():
                             reset_frame(qubit.xy.name)
-                            qubit.xy.wait(2 * qubit.thermalization_time * u.ns)
+                            qubit.xy.wait(2 * qubit.thermalization_time // 4)
                         align()
 
                         # EF Ramsey sequence
@@ -157,7 +157,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             if node.parameters.use_state_discrimination:
                                 assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                         align()
 
         with stream_processing():

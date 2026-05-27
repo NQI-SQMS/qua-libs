@@ -131,7 +131,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         # readout the resonator
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                         # wait for the resonator to deplete
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        qubit.resonator.wait(node.machine.depletion_time // 4)
                         # save data
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
@@ -244,7 +244,7 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             fit_result = node.results["fit_results"][q.name]
             # Update the integration weight angle only when I_rot was used and
             # update_iw_angle is True (set False when a prior node already calibrated it).
-            if node.parameters.signal_source != "IQ_abs" and node.parameters.update_iw_angle:
+            if node.parameters.signal_source not in ("IQ_abs", "I") and node.parameters.update_iw_angle:
                 q.resonator.operations["readout"].integration_weights_angle = fit_result["iw_angle"]
             if node.parameters.update_pulses_amplitude:
                 # Update the saturation amplitude

@@ -67,8 +67,8 @@ Analysis
 --------
   • For each amplitude A, fit f_R(A) from the Ramsey oscillation.
   • Δf(A) = f_R(A) − f_R(0).
-  • Fit Δf vs A²  →  slope = 2χ · (dn̄_ss/dA²).
-  • If displacement_k is calibrated: χ = slope / (2 × displacement_k).
+  • Fit Δf vs A²  →  slope = chi · (dn̄_ss/dA²).
+  • If displacement_k is calibrated: chi = slope / displacement_k.
 
 State updates
 -------------
@@ -261,8 +261,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             if node.parameters.use_state_discrimination:
                                 assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
                                 save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time * u.ns)
-                            qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
                         align()
                         # ── Wait for cavity CW drive to finish ───────────────

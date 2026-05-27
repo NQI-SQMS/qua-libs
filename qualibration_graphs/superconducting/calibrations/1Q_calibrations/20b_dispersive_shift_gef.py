@@ -106,7 +106,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             qubit.resonator.intermediate_frequency + df
                         )
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        qubit.resonator.wait(node.machine.depletion_time // 4)
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
                     align()
@@ -114,13 +114,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 # ── |e⟩ sweep ──────────────────────────────────────────────
                 with for_(*from_array(df, dfs)):
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.xy.wait(qubit.thermalization_time * u.ns)
+                        qubit.xy.wait(qubit.thermalization_time // 4)
                         qubit.xy.play("x180")
                         qubit.resonator.update_frequency(
                             qubit.resonator.intermediate_frequency + df
                         )
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        qubit.resonator.wait(node.machine.depletion_time // 4)
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
                     align()
@@ -128,7 +128,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 # ── |f⟩ sweep ──────────────────────────────────────────────
                 with for_(*from_array(df, dfs)):
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.xy.wait(qubit.thermalization_time * u.ns)
+                        qubit.xy.wait(qubit.thermalization_time // 4)
                         # Prepare |e⟩
                         qubit.xy.play("x180")
                         # Switch to EF frequency and prepare |f⟩
@@ -142,7 +142,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             qubit.resonator.intermediate_frequency + df
                         )
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                        qubit.resonator.wait(node.machine.depletion_time // 4)
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
                     align()

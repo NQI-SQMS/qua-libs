@@ -108,7 +108,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     # Measure the resonator (send a readout pulse and record the raw ADC trace)
                     qubit.resonator.measure("readout", stream=adc_st[i])
                     # Wait for the resonator to deplete
-                    qubit.resonator.wait(node.machine.depletion_time * u.ns)
+                    qubit.resonator.wait(node.machine.depletion_time // 4)
                 align()
 
         with stream_processing():
