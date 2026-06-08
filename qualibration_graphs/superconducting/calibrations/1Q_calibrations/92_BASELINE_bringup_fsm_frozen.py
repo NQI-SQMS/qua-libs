@@ -1,3 +1,14 @@
+# =============================================================================
+# FROZEN BASELINE — DO NOT MODIFY
+# =============================================================================
+# This graph represents the pre-calib_framework FSM-based bringup system.
+# It is preserved as Baseline 1 for experimental comparison in:
+#   "Autonomous Initial Bringup of Superconducting Transmon Qubits via
+#    Sequential Bayesian Inference" — L. Bove (in preparation)
+# Date frozen: 2026-05-27
+# DO NOT run this graph for production calibration.
+# Use bringup_causal.py instead.
+# =============================================================================
 # %%
 """
 Fixed-Frequency Transmon Bring-Up Graph (Adaptive FSM)
@@ -24,7 +35,7 @@ Full automated bring-up sequence for a fixed-frequency transmon qubit.
   │  6.  readout_frequency_optimization                                     │
   │  7.  readout_length_optimization                                        │
   │  8.  readout_power_optimization                                         │
-  │  9.  [ef_bringup] (if run_ef_calibration=True)                         │
+  │  9.  [ef_bringup] (if run_ef_calibration=True)                          │
   │  10. [cavity_bringup] (if run_cavity_calibration=True)                  │
   └─────────────────────────────────────────────────────────────────────────┘
 

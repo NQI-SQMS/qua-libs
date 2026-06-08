@@ -8,10 +8,6 @@ from scipy.optimize import curve_fit
 
 from qualibrate import QualibrationNode
 from qualibration_libs.data import add_amplitude_and_phase, convert_IQ_to_V
-from calibration_utils.error_codes import (
-    ResonatorPunchOutErrorCode,
-    ResonatorPunchOutCorrectiveAction,
-)
 
 
 # =========================
@@ -25,9 +21,6 @@ class FitParameters:
     frequency_shift: float
     optimal_power: float
     freq_low_abs: float = 0.0   # absolute resonator frequency at LOW power (use this to update state)
-    error_code: int = ResonatorPunchOutErrorCode.SUCCESS
-    corrective_action: int = ResonatorPunchOutCorrectiveAction.NONE
-    action_magnitude: float = 0.0
     chi2_low: float = float("nan")
     """Residual chi-squared from Lorentzian dip fit at low power: SS_res / ((N-4)*amp²)."""
     chi2_high: float = float("nan")
@@ -43,12 +36,10 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
         log_callable = logging.getLogger(__name__).info
 
     for q in fit_results.keys():
-        error_code = ResonatorPunchOutErrorCode(fit_results[q].get("error_code", 0))
         s_qubit = f"Results for qubit {q}: "
         s_power = f"Optimal readout power: {fit_results[q]['optimal_power']:.2f} dBm | "
         s_freq = f"Resonator frequency: {1e-9 * fit_results[q]['resonator_frequency']:.3f} GHz | "
         s_shift = f"(shift of {1e-6 * fit_results[q]['frequency_shift']:.3f} MHz)\n"
-        s_error = f"Error code: {error_code.name} ({error_code.value})\n"
 
         chi2_low = fit_results[q].get("chi2_low", float("nan"))
         chi2_high = fit_results[q].get("chi2_high", float("nan"))
@@ -56,12 +47,8 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
         if np.isfinite(chi2_low) or np.isfinite(chi2_high):
             s_chi2 = f"Lorentzian chi2: low={chi2_low:.3f}, high={chi2_high:.3f}\n"
 
-        if fit_results[q]["success"]:
-            s_qubit += " SUCCESS!\n"
-        else:
-            s_qubit += " FAIL!\n"
-
-        log_callable(s_qubit + s_error + s_power + s_freq + s_shift + s_chi2)
+        s_qubit += " SUCCESS!\n" if fit_results[q]["success"] else " FAIL!\n"
+        log_callable(s_qubit + s_power + s_freq + s_shift + s_chi2)
 
 
 # =========================
@@ -252,31 +239,11 @@ def _extract_relevant_fit_parameters(
     fit = fit.assign_coords(success=("qubit", success))
 
     fit_results = {}
-    qubit_list = fit.qubit.values.tolist()
     for q in fit.qubit.values:
-        q_idx = qubit_list.index(q)
         q_success = bool(fit.sel(qubit=q).success)
         q_shift = float(fit.freq_shift.sel(qubit=q))
-        q_abs_shift = abs(q_shift)
-        q_chi2_ok = bool(chi2_ok[q_idx])
-        q_no_nans = bool(no_nans[q_idx])
-        q_freq_in_range = bool(freq_in_range[q_idx])
         q_chi2_low = float(fit.lorentz_chi2.sel(qubit=q).isel(power=0).item())
         q_chi2_high = float(fit.lorentz_chi2.sel(qubit=q).isel(power=-1).item())
-
-        if q_success:
-            error_code = ResonatorPunchOutErrorCode.SUCCESS
-        elif not q_chi2_ok:
-            # Lorentzian fit failed at one or both power points → noisy data
-            error_code = ResonatorPunchOutErrorCode.INVALID_DATA
-        elif not q_no_nans:
-            error_code = ResonatorPunchOutErrorCode.INVALID_DATA
-        elif not q_freq_in_range:
-            error_code = ResonatorPunchOutErrorCode.INVALID_DATA
-        elif q_abs_shift < 1e3:
-            error_code = ResonatorPunchOutErrorCode.NO_SHIFT_DETECTED
-        else:
-            error_code = ResonatorPunchOutErrorCode.SHIFT_BELOW_THRESHOLD
 
         fit_results[q] = FitParameters(
             success=q_success,
@@ -284,7 +251,6 @@ def _extract_relevant_fit_parameters(
             frequency_shift=q_shift,
             optimal_power=float(fit.optimal_power.sel(qubit=q)),
             freq_low_abs=float(fit.freq_low_abs.sel(qubit=q)),
-            error_code=int(error_code),
             chi2_low=q_chi2_low,
             chi2_high=q_chi2_high,
         )

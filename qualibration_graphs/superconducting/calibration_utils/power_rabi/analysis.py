@@ -12,11 +12,27 @@ try:
 except ImportError:
     def apply_confusion_correction_to_dataset(ds, node):
         raise NotImplementedError("apply_confusion_correction_to_dataset not available in this qualibration_libs version")
-from calibration_utils.error_codes import PowerRabiErrorCode, PowerRabiCorrectiveAction
+from enum import IntEnum
 
-# Thresholds for period-count classification (in adaptive mode)
+# Thresholds for period-count classification
 _TOO_MANY_PERIODS_THRESHOLD = 2.0   # more than 2 full oscillations → base amp too high
 _TOO_FEW_PERIODS_THRESHOLD = 0.5    # less than 0.5 oscillations  → base amp too low
+
+
+class _PowerRabiErrorCode(IntEnum):
+    """Internal classification of the Rabi calibration outcome.
+
+    Numeric values are stable and read by the EF bringup section of bringup_graphs.py.
+    Do NOT renumber without updating bringup_graphs._PowerRabiErrorCode.
+    """
+    SUCCESS = 0
+    NO_OSCILLATION = 1
+    TOO_MANY_PERIODS = 2
+    TOO_FEW_PERIODS = 3
+
+
+# Public alias for backward compatibility (e.g. bringup_graphs reads error_code as int).
+PowerRabiErrorCode = _PowerRabiErrorCode
 
 
 @dataclass
@@ -31,12 +47,8 @@ class FitParameters:
     """Number of Rabi oscillation periods detected across the amplitude sweep."""
     chi2: float = float("nan")
     """Residual chi-squared: SS_res / ((N-4)·a²); chi2 > 2 → NO_OSCILLATION."""
-    error_code: int = int(PowerRabiErrorCode.SUCCESS)
-    """PowerRabiErrorCode: classification of the calibration result."""
-    corrective_action: int = int(PowerRabiCorrectiveAction.NONE)
-    """PowerRabiCorrectiveAction: action applied (or to be applied) to fix the issue."""
-    action_magnitude: float = 0.0
-    """Magnitude of the corrective action (interpretation depends on corrective_action)."""
+    error_code: int = int(_PowerRabiErrorCode.SUCCESS)
+    """Rabi outcome code; read by EF bringup in bringup_graphs.py."""
     pulse_length_ns: float = float("nan")
     """Pulse length used during this calibration run [ns]. Saved to QUAM on success."""
 
@@ -341,8 +353,6 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
             num_periods=num_periods,
             chi2=q_chi2,
             error_code=int(error_code),
-            corrective_action=int(PowerRabiCorrectiveAction.NONE),
-            action_magnitude=0.0,
             pulse_length_ns=pulse_length_ns,
         )
     return fit, fit_results

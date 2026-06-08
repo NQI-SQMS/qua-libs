@@ -8,10 +8,6 @@ from scipy.optimize import curve_fit
 from qualibrate import QualibrationNode
 from qualibration_libs.data import add_amplitude_and_phase, convert_IQ_to_V
 from qualibration_libs.analysis import peaks_dips
-from calibration_utils.error_codes import (
-    ResonatorSpectroscopyErrorCode,
-    ResonatorSpectroscopyCorrectiveAction,
-)
 
 
 @dataclass
@@ -21,9 +17,6 @@ class FitParameters:
     frequency: float
     fwhm: float
     success: bool
-    error_code: int = ResonatorSpectroscopyErrorCode.SUCCESS
-    corrective_action: int = ResonatorSpectroscopyCorrectiveAction.NONE
-    action_magnitude: float = 0.0
     chi2: float = float("nan")
     """Residual chi-squared from Lorentzian dip fit: SS_res / ((N-4)*amp²).
     chi2 ≤ threshold → real dip; chi2 > threshold → fitting noise."""
@@ -41,10 +34,7 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
         if np.isfinite(chi2_val):
             s_fwhm += f" | Residual chi2: {chi2_val:.3f}"
         s_fwhm += "\n"
-        if fit_results[q]["success"]:
-            s_qubit += " SUCCESS!\n"
-        else:
-            s_qubit += " FAIL!\n"
+        s_qubit += " SUCCESS!\n" if fit_results[q]["success"] else " FAIL!\n"
         log_callable(s_qubit + s_freq + s_fwhm)
 
 
@@ -144,16 +134,10 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, ds: xr.Dataset, node: Qual
     fit_results = {}
     for q in fit.qubit.values:
         q_success = bool(fit.sel(qubit=q).success.values)
-        error_code = (
-            ResonatorSpectroscopyErrorCode.SUCCESS
-            if q_success
-            else ResonatorSpectroscopyErrorCode.NO_DIP_FOUND
-        )
         fit_results[q] = FitParameters(
             frequency=fit.sel(qubit=q).res_freq.values.item(),
             fwhm=fit.sel(qubit=q).fwhm.values.item(),
             success=q_success,
-            error_code=int(error_code),
             chi2=float(chi2.sel(qubit=q).item()),
         )
 

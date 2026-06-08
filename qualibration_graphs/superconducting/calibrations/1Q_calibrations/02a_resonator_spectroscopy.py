@@ -22,10 +22,6 @@ from calibration_utils.resonator_spectroscopy import (
     plot_raw_amplitude_with_fit,
     plot_raw_phase,
 )
-from calibration_utils.error_codes import (
-    ResonatorSpectroscopyErrorCode,
-    ResonatorSpectroscopyCorrectiveAction,
-)
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.runtime import simulate_and_plot
 from qualibration_libs.data import XarrayDataFetcher
@@ -259,37 +255,30 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
     with node.record_state_updates():
         for q in node.namespace["qubits"]:
             fit_result = node.results["fit_results"][q.name]
-            error_code = ResonatorSpectroscopyErrorCode(
-                fit_result.get("error_code", int(ResonatorSpectroscopyErrorCode.SUCCESS))
-            )
 
             if node.outcomes[q.name] == "failed":
-                if error_code == ResonatorSpectroscopyErrorCode.NO_DIP_FOUND:
-                    temp_data = _ensure_temp_calibration(machine, q.name)
+                temp_data = _ensure_temp_calibration(machine, q.name)
 
-                    # Blacklist the candidate frequency that just failed
-                    candidate_freq = float(q.resonator.RF_frequency)
-                    if temp_data.blacklisted_resonator_frequencies is None:
-                        temp_data.blacklisted_resonator_frequencies = []
-                    if candidate_freq not in temp_data.blacklisted_resonator_frequencies:
-                        temp_data.blacklisted_resonator_frequencies.append(candidate_freq)
-                    fit_result["corrective_action"] = int(ResonatorSpectroscopyCorrectiveAction.BLACKLIST_FREQUENCY)
-                    fit_result["action_magnitude"] = candidate_freq
+                # Blacklist the candidate frequency that just failed
+                candidate_freq = float(q.resonator.RF_frequency)
+                if temp_data.blacklisted_resonator_frequencies is None:
+                    temp_data.blacklisted_resonator_frequencies = []
+                if candidate_freq not in temp_data.blacklisted_resonator_frequencies:
+                    temp_data.blacklisted_resonator_frequencies.append(candidate_freq)
+                node.log(
+                    f"[{q.name}]: No resonator dip found. "
+                    f"Blacklisted RF frequency {candidate_freq / 1e9:.6f} GHz."
+                )
+
+                # Restore the user's original resonator frequency so that the
+                # next broad spectroscopy sweep is centred on the original guess.
+                if temp_data.initial_resonator_f01 is not None:
+                    q.resonator.f_01 = temp_data.initial_resonator_f01
+                    q.resonator.RF_frequency = temp_data.initial_resonator_RF_frequency
                     node.log(
-                        f"[Adaptive] {q.name}: No resonator dip found. "
-                        f"Blacklisted RF frequency {candidate_freq / 1e9:.6f} GHz."
+                        f"[{q.name}]: Restored initial resonator frequency "
+                        f"{temp_data.initial_resonator_RF_frequency / 1e9:.6f} GHz."
                     )
-
-                    # Restore the user's original resonator frequency so that the
-                    # next broad spectroscopy sweep is centred on the original guess.
-                    if temp_data.initial_resonator_f01 is not None:
-                        q.resonator.f_01 = temp_data.initial_resonator_f01
-                        q.resonator.RF_frequency = temp_data.initial_resonator_RF_frequency
-                        node.log(
-                            f"[Adaptive] {q.name}: Restored initial resonator frequency "
-                            f"{temp_data.initial_resonator_RF_frequency / 1e9:.6f} GHz "
-                            f"for next broad spectroscopy sweep."
-                        )
                 continue
 
             results = fit_result

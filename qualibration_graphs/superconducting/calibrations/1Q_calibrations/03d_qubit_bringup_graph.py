@@ -1,35 +1,21 @@
 # %%
 """
-Qubit Optimization Graph (Adaptive)
+Qubit Bringup Graph — Sequential
 
-This graph finds the ideal qubit parameters through a self-correcting nested loop.
-The three nodes form an inner calibration subgraph that is repeated until the Rabi
-calibration succeeds:
+A simple sequential graph that runs calibration nodes in order:
+  spec_vs_power  →  power_rabi
 
-  ┌─ outer loop (restart on NO_OSCILLATION) ──────────────────────────────────┐
-  │  spec_vs_power ──► qubit_spec ──► power_rabi                              │
-  │  [ inner loop ]                   [ inner loop ]                          │
-  │  (span expansion)                 (amplitude rescaling)                   │
-  └────────────────────────────────────────────────────────────────────────────┘
-
-Retry logic:
-  - power_rabi TOO_MANY / TOO_FEW periods → only power_rabi is retried after
-    the adaptive amplitude rescaling (new_amp = old_amp / num_periods).
-  - power_rabi NO_OSCILLATION → current qubit frequency is blacklisted in
-    temp_calibration and the outer loop restarts from spec_vs_power to find
-    a new candidate frequency.
+Each node is a plain standalone node with no retry loops or FSM logic.
+Retry orchestration (if needed) is handled externally by CausalOrchestrator
+via bringup_causal.py.
 """
 
-from typing import List, Optional
+from typing import List
 
 from qualibrate import (
     GraphParameters,
     QualibrationGraph,
     QualibrationLibrary,
-)
-from calibration_utils.bringup_graphs import (
-    build_qubit_calibration,
-    should_restart_qubit_calibration,
 )
 
 library = QualibrationLibrary.get_active_library()
@@ -37,18 +23,10 @@ library = QualibrationLibrary.get_active_library()
 test_qubits = ["q1"]
 
 
-class QubitOptimizationParameters(GraphParameters):
-    """Parameters for the adaptive qubit optimization graph."""
+class QubitBringupParameters(GraphParameters):
+    """Parameters for the sequential qubit bringup graph."""
 
     qubits: List[str] = test_qubits
-
-    # Iteration limits
-    max_spec_vs_power_iterations: int = 5
-    max_rabi_amp_iterations: int = 5
-    max_qubit_calibration_iterations: int = 3
-
-    # General
-    multiplexed: bool = False
 
     # Qubit spectroscopy vs power
     spec_vs_power_frequency_span_mhz: float = 200
@@ -67,39 +45,53 @@ class QubitOptimizationParameters(GraphParameters):
     spec_vs_power_peak_persistence_lookahead: int = 0
     spec_vs_power_peak_persistence_freq_tolerance_hz: float = 5e6
 
-    # Standard qubit spectroscopy
-    qubit_spec_frequency_span_mhz: float = 50
-    qubit_spec_frequency_step_mhz: float = 0.1
-    qubit_spec_operation: str = "saturation"
-    qubit_spec_operation_len_ns: int = 200_000
-    qubit_spec_operation_amplitude_factor: float = 1.0
-    qubit_spec_num_shots: int = 100
-    qubit_spec_signal_source: str = "I_rot"
-    qubit_spec_find_dip: bool = True
-    qubit_spec_target_peak_width: float = 3e6
-    qubit_spec_update_pulses_amplitude: bool = False
-
-    # Time Rabi
-    time_rabi_min_duration_ns: int = 16
-    time_rabi_max_duration_ns: int = 300
-    time_rabi_duration_step_ns: int = 4
-    time_rabi_num_shots: int = 200
-    time_rabi_operation: str = "x180"
-    time_rabi_operation_amplitude_factor: float = 1.0
-    time_rabi_drive_power_dbm: Optional[float] = None
-    time_rabi_max_amplitude_opx: float = 0.1
+    # Power Rabi
+    rabi_min_amp_factor: float = 0.8
+    rabi_max_amp_factor: float = 1.2
+    rabi_amp_factor_step: float = 0.01
+    rabi_num_shots: int = 200
+    rabi_operation: str = "x180"
+    rabi_max_number_pulses_per_sweep: int = 1
 
 
 with QualibrationGraph.build(
-    "qubit_optimization",
-    parameters=QubitOptimizationParameters(),
+    "qubit_bringup",
+    parameters=QubitBringupParameters(),
 ) as graph:
-    qubit_calibration = build_qubit_calibration(graph, library)
-    graph.add_node(qubit_calibration)
-    graph.loop(
-        qubit_calibration,
-        on=should_restart_qubit_calibration,
-        max_iterations=graph.parameters.max_qubit_calibration_iterations,
+    spec_vs_power = library.nodes["03c_qubit_spectroscopy_vs_power"].copy(
+        name="spec_vs_power",
+        qubits=graph.parameters.qubits,
+        frequency_span_in_mhz=graph.parameters.spec_vs_power_frequency_span_mhz,
+        frequency_step_in_mhz=graph.parameters.spec_vs_power_frequency_step_mhz,
+        num_power_points=graph.parameters.spec_vs_power_num_power_points,
+        num_shots=graph.parameters.spec_vs_power_num_shots,
+        min_power_dbm=graph.parameters.spec_vs_power_min_power_dbm,
+        max_power_dbm=graph.parameters.spec_vs_power_max_power_dbm,
+        operation=graph.parameters.spec_vs_power_operation,
+        operation_len_in_ns=graph.parameters.spec_vs_power_operation_len_ns,
+        linewidth_threshold_hz=graph.parameters.spec_vs_power_linewidth_threshold_hz,
+        max_amplitude_opx=graph.parameters.spec_vs_power_max_amplitude_opx,
+        min_amplitude_opx=graph.parameters.spec_vs_power_min_amplitude_opx,
+        power_buffer_db=graph.parameters.spec_vs_power_power_buffer_db,
+        signal_source=graph.parameters.spec_vs_power_signal_source,
+        peak_persistence_lookahead=graph.parameters.spec_vs_power_peak_persistence_lookahead,
+        peak_persistence_freq_tolerance_hz=graph.parameters.spec_vs_power_peak_persistence_freq_tolerance_hz,
     )
+
+    power_rabi = library.nodes["04b_power_rabi"].copy(
+        name="power_rabi",
+        qubits=graph.parameters.qubits,
+        min_amp_factor=graph.parameters.rabi_min_amp_factor,
+        max_amp_factor=graph.parameters.rabi_max_amp_factor,
+        amp_factor_step=graph.parameters.rabi_amp_factor_step,
+        num_shots=graph.parameters.rabi_num_shots,
+        operation=graph.parameters.rabi_operation,
+        max_number_pulses_per_sweep=graph.parameters.rabi_max_number_pulses_per_sweep,
+    )
+
+    graph.add_node(spec_vs_power)
+    graph.add_node(power_rabi)
+
+    graph.connect(spec_vs_power, power_rabi)
 
 graph.run()

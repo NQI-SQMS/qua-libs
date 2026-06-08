@@ -8,10 +8,6 @@ from scipy.signal import convolve2d
 from qualibrate import QualibrationNode
 from qualibration_libs.data import add_amplitude_and_phase, convert_IQ_to_V
 from qualibration_libs.analysis import peaks_dips, lorentzian_peak
-from calibration_utils.error_codes import (
-    QubitSpectroscopyErrorCode,
-    QubitSpectroscopyCorrectiveAction,
-)
 
 
 @dataclass
@@ -24,9 +20,6 @@ class FitParameters:
     iw_angle: float
     success: bool
     over_saturated: bool = False
-    error_code: int = QubitSpectroscopyErrorCode.SUCCESS
-    corrective_action: int = QubitSpectroscopyCorrectiveAction.NONE
-    action_magnitude: float = 0.0
     # x180/saturation power: derived from linewidth-doubling power + T_spec/T_pi scaling
     x180_power_dbm: float = float("nan")
 
@@ -534,17 +527,6 @@ def fit_raw_data(
 
         used_fallback_q = bool(ds["used_fallback_power"].sel(qubit=q).item())
 
-        if no_phase_peak:
-            error_code = QubitSpectroscopyErrorCode.NO_PEAK_FOUND
-        elif success and (over_saturated or used_fallback_q):
-            error_code = QubitSpectroscopyErrorCode.OVER_SATURATED_SUCCESS
-        elif success:
-            error_code = QubitSpectroscopyErrorCode.SUCCESS
-        elif over_saturated:
-            error_code = QubitSpectroscopyErrorCode.OVER_SATURATED
-        else:
-            error_code = QubitSpectroscopyErrorCode.NO_PEAK_FOUND
-
         iw_angle_q = float(ds["iw_angle"].sel(qubit=q).item()) if success else float("nan")
 
         # x180/saturation power via inverse-proportionality scaling (no T2* needed).
@@ -594,7 +576,6 @@ def fit_raw_data(
             iw_angle=iw_angle_q,
             success=success,
             over_saturated=over_saturated,
-            error_code=int(error_code),
             x180_power_dbm=x180_power_q,
         )
 
@@ -608,14 +589,13 @@ def log_fitted_results(fit_results: Dict[str, Dict], log_callable=None):
     for qubit_name, result in fit_results.items():
         success = result.get("success", False)
         over_saturated = result.get("over_saturated", False)
-        error_code = QubitSpectroscopyErrorCode(result.get("error_code", 0))
         x180_pwr = result.get("x180_power_dbm", float("nan"))
         x180_str = f"{x180_pwr:.1f} dBm" if np.isfinite(x180_pwr) else "N/A"
 
         if success:
             status = "SUCCESS" + (" (OVER-SATURATED)" if over_saturated else "")
             log_callable(
-                f"[{qubit_name}] {status} - Error code: {error_code.name} ({error_code.value})\n"
+                f"[{qubit_name}] {status}\n"
                 f"  Selected power:  {result['selected_power']:.2f} dBm\n"
                 f"  Qubit frequency: {result['rough_qubit_frequency'] / 1e9:.6f} GHz\n"
                 f"  Min linewidth:   {result['linewidth'] / 1e6:.2f} MHz\n"
@@ -624,6 +604,6 @@ def log_fitted_results(fit_results: Dict[str, Dict], log_callable=None):
             )
         else:
             log_callable(
-                f"[{qubit_name}] FAILED - Error code: {error_code.name} ({error_code.value})\n"
+                f"[{qubit_name}] FAILED\n"
                 f"  No valid peak found in phase / I_rot"
             )
