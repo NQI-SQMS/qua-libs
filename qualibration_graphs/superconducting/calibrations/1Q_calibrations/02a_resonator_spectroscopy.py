@@ -21,6 +21,7 @@ from calibration_utils.resonator_spectroscopy import (
     log_fitted_results,
     plot_raw_amplitude_with_fit,
     plot_raw_phase,
+    plot_circle_fit_result,
 )
 from calibration_utils.error_codes import (
     ResonatorSpectroscopyErrorCode,
@@ -224,6 +225,16 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
         "amplitude": fig_fit_amplitude,
     }
 
+    if node.parameters.run_circle_fit:
+        fig_circle = plot_circle_fit_result(
+            node.results["ds_raw"],
+            node.namespace["qubits"],
+            node.results["fit_results"],
+            circle_fit_results=node.namespace.get("circle_fit_results"),
+        )
+        plt.show()
+        node.results["figures"]["circle_fit"] = fig_circle
+
 
 # %% {Update_state}
 @node.run_action(skip_if=node.parameters.simulate)
@@ -309,6 +320,16 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                     power_in_dbm=node.parameters.readout_power_dbm,
                     max_amplitude=node.parameters.max_amp,
                 )
+
+            # Store circle-fit Q parameters when run_circle_fit=True and fit succeeded
+            if node.parameters.run_circle_fit and np.isfinite(
+                results.get("Q_loaded", float("nan"))
+            ):
+                q.resonator.Q_loaded       = float(results["Q_loaded"])
+                q.resonator.Q_internal     = float(results["Q_internal"])
+                q.resonator.Q_external     = float(results["Q_external"])
+                q.resonator.kappa_Hz       = float(results["kappa_Hz"])
+                q.resonator.phi0_circlefit = float(results["phi0_circlefit"])
 
 # %% {Save_results}
 @node.run_action()

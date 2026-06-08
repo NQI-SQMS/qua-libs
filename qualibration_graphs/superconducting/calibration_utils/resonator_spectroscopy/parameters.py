@@ -30,11 +30,16 @@ class NodeSpecificParameters(RunnableParameters):
     parameters (center, FWHM, amplitude, offset).  chi2 ≤ threshold → real dip detected;
     chi2 > threshold → residuals dominate the dip depth, likely fitting noise.
     Default 3.0. Lower (e.g. 1.5) to reject marginal fits; raise if noisy data."""
-    use_phase_fallback: bool = True
-    """When True (default), if the amplitude-based resonator fit fails, automatically retry
-    using the derivative of the phase signal (dφ/df), which produces a Lorentzian-like peak
-    at the resonator frequency.  Useful for high-Q or SRF resonators where the amplitude dip
-    is weak but the phase response is strong."""
+    run_circle_fit: bool = False
+    """When True, run the Probst/Taeyoon circle-fit pipeline after the Lorentzian dip fit
+    to extract Q_loaded, Q_internal, Q_external, kappa_Hz, and phi0 from the IQ circle.
+    Results are stored in QUAM (q.resonator.Q_loaded, etc.) at the end of the node.
+    Geometry is controlled by circle_fit_geometry. Default False."""
+    circle_fit_geometry: str = "transmission"
+    """Measurement geometry used by the circle fit.
+    'transmission' — hanger/notch S21 (two-port, signal dips at resonance).
+    'reflection'   — one-port S11 (signal loops around a circle centred away from origin).
+    Default 'transmission'."""
 
 
 
