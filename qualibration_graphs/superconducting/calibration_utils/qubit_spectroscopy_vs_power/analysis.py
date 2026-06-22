@@ -216,11 +216,28 @@ def detect_qubit_by_gradient_score(
     data = np.asarray(data, dtype=float)
     freq = np.asarray(freq, dtype=float)
 
-    # Step 1 — Gaussian smoothing
-    data_smooth = gaussian_filter(data, sigma=[1, 2])
+    # Step 1 — Gaussian smoothing (NaN-safe normalized convolution).
+    # `gaussian_filter` does not ignore NaNs: a single NaN (e.g. a
+    # blacklisted detuning/power point) poisons every pixel within the
+    # kernel's support, which with sigma=1 on the power axis can wipe out
+    # most of a map with only ~10 power points. Convolve the valid-data
+    # mask alongside the data and divide back out so masked holes stay
+    # local instead of spreading.
+    valid = np.isfinite(data)
+    data_filled = np.where(valid, data, 0.0)
+    weight = gaussian_filter(valid.astype(float), sigma=[1, 2])
+    data_smooth = gaussian_filter(data_filled, sigma=[1, 2])
+    with np.errstate(invalid="ignore", divide="ignore"):
+        data_smooth = np.where(weight > 1e-8, data_smooth / weight, np.nan)
 
     # Step 2 — remove row-wise DC offset
-    data_norm = data_smooth - np.mean(data_smooth, axis=1, keepdims=True)
+    data_norm = data_smooth - np.nanmean(data_smooth, axis=1, keepdims=True)
+
+    # Downstream detectors can't handle NaNs (convolve2d/gradient/var would
+    # propagate them); fill any remaining masked pixels with 0 (already
+    # the row mean) just for score computation, but keep `data_norm` itself
+    # with NaNs so the plotted heatmap still shows the masked points as gaps.
+    data_norm_safe = np.nan_to_num(data_norm, nan=0.0)
 
     # Step 3 — Ridge detector: vertical-ridge convolution kernel
     # Each column is compared to its immediate left/right neighbours;
@@ -228,16 +245,16 @@ def detect_qubit_by_gradient_score(
     kernel = np.array([[-1, 2, -1],
                        [-1, 2, -1],
                        [-1, 2, -1]], dtype=float)
-    ridge_map = convolve2d(data_norm, kernel, mode="same", boundary="symm")
+    ridge_map = convolve2d(data_norm_safe, kernel, mode="same", boundary="symm")
     ridge_score_raw = np.sum(np.abs(ridge_map), axis=0)
 
     # Step 4 — Persistence detector: how many power rows show a strong gradient
-    grad_f = np.gradient(data_norm, axis=1)
+    grad_f = np.gradient(data_norm_safe, axis=1)
     threshold = 1.0 * np.std(grad_f)
     persist_score_raw = np.sum(np.abs(grad_f) > threshold, axis=0).astype(float)
 
     # Step 5 — Variance detector: feature must vary with power
-    var_score_raw = np.var(data_norm, axis=0)
+    var_score_raw = np.var(data_norm_safe, axis=0)
 
     # Step 6 — Normalize each score to [0, 1]
     def _norm(s):

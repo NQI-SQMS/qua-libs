@@ -99,13 +99,15 @@ def _lorentzian_dip(f, f0, gamma, amp, offset):
 def _fit_lorentzian(detuning: np.ndarray, data: np.ndarray):
     """Fit a Lorentzian dip to (detuning, data).
 
-    Returns (f0_fit, chi2) where:
-      f0_fit : fitted center detuning (Hz), or nan on failure.
-      chi2   : SS_res / ((N-4)*amp²), or inf on failure.
+    Returns (f0_fit, chi2, gamma_fit, amp_fit, offset_fit) where:
+      f0_fit  : fitted center detuning (Hz), or nan on failure.
+      chi2    : SS_res / ((N-4)*amp²), or inf on failure.
+      gamma_fit, amp_fit, offset_fit : remaining Lorentzian parameters (nan on failure),
+        kept so the fitted curve can be reconstructed for plotting.
 
     Uses peaks_dips for the initial f0 estimate (baseline-subtracted, prominence-gated)
     so the warm start is robust to sloping baselines and low-SNR data.  If peaks_dips
-    finds no prominent dip, returns (nan, inf) immediately — the caller interprets this
+    finds no prominent dip, returns nan/inf immediately — the caller interprets this
     as a failed fit and chi2 = inf, which correctly triggers a punch-out retry.
     """
     from qualibration_libs.analysis import peaks_dips
@@ -114,7 +116,7 @@ def _fit_lorentzian(detuning: np.ndarray, data: np.ndarray):
     N = len(detuning)
     P = 4  # f0, gamma, amp, offset
     if N <= P:
-        return np.nan, float("inf")
+        return np.nan, float("inf"), np.nan, np.nan, np.nan
 
     # Build a minimal DataArray so peaks_dips can operate on it.
     da = xr.DataArray(data, coords={"detuning": detuning}, dims=["detuning"])
@@ -125,7 +127,7 @@ def _fit_lorentzian(detuning: np.ndarray, data: np.ndarray):
     # peaks_dips returns nan when no prominent peak/dip is found.
     # At low SNR this is the correct outcome — flag as failed immediately.
     if not np.isfinite(f0_init) or not np.isfinite(width_init) or width_init <= 0:
-        return np.nan, float("inf")
+        return np.nan, float("inf"), np.nan, np.nan, np.nan
 
     n_edge = max(1, N // 10)
     offset_init = float(np.mean(np.concatenate([data[:n_edge], data[-n_edge:]])))
@@ -141,17 +143,111 @@ def _fit_lorentzian(detuning: np.ndarray, data: np.ndarray):
             maxfev=3000,
             bounds=([-np.inf, 0.0, 0.0, -np.inf], [np.inf, np.inf, np.inf, np.inf]),
         )
-        f0_fit, _gamma, amp_fit, _offset = popt
+        f0_fit, gamma_fit, amp_fit, offset_fit = popt
         if amp_fit <= 0 or not np.isfinite(f0_fit):
-            return np.nan, float("inf")
+            return np.nan, float("inf"), np.nan, np.nan, np.nan
         SS_res = float(np.sum((data - _lorentzian_dip(detuning, *popt)) ** 2))
-        return f0_fit, SS_res / ((N - P) * amp_fit ** 2)
+        return f0_fit, SS_res / ((N - P) * amp_fit ** 2), gamma_fit, amp_fit, offset_fit
     except Exception:
-        return np.nan, float("inf")
+        return np.nan, float("inf"), np.nan, np.nan, np.nan
 
 
 # =========================
-# Shift-based fit logic
+# Bifurcation-based fit logic (dense power sweep, >2 points)
+# =========================
+
+def _first_threshold_crossing(diff_arr: np.ndarray, factor: float = 3.0) -> int:
+    """Index of the first step where `diff_arr` exceeds `factor` times its median.
+
+    Returns `len(diff_arr)` (one past the last valid step index) if the median is
+    zero/non-finite or no step crosses the threshold — i.e. no bifurcation was
+    observed within the swept range, so the whole range is treated as "safe".
+    """
+    if diff_arr.size == 0:
+        return 0
+    median = np.median(diff_arr)
+    if not np.isfinite(median) or median == 0:
+        return len(diff_arr)
+    idxs = np.flatnonzero(diff_arr > factor * median)
+    return int(idxs[0]) if idxs.size else len(diff_arr)
+
+
+def _fit_bifurcation_dense(
+    ds: xr.Dataset, node: QualibrationNode
+) -> Tuple[xr.Dataset, Dict[str, FitParameters]]:
+    """Locate the punch-out bifurcation from a dense power sweep.
+
+    For each power, the resonance is taken as the detuning of the magnitude minimum
+    (argmin of IQ_abs_norm). The bifurcation is the first power step where the
+    resonance detuning or phase jumps by more than 3x the median step size; the
+    "safe" (linear-regime) operating power is taken 2 steps before that.
+    """
+    powers = ds.power.values
+    detuning = ds.detuning.values
+    n_powers = len(powers)
+    qubits = node.namespace["qubits"]
+    n_qubits = len(qubits)
+
+    min_freq = np.full((n_qubits, n_powers), np.nan)
+    min_phase = np.full((n_qubits, n_powers), np.nan)
+
+    for i, q in enumerate(qubits):
+        mag = ds.sel(qubit=q.name).IQ_abs_norm.transpose("power", "detuning").values
+        phase = ds.sel(qubit=q.name).phase.transpose("power", "detuning").values
+        idx = np.argmin(mag, axis=1)
+        min_freq[i] = detuning[idx]
+        min_phase[i] = phase[np.arange(n_powers), idx]
+
+    base_freq = np.array([q.resonator.RF_frequency for q in qubits])
+
+    bif_idx = np.zeros(n_qubits, dtype=int)
+    safe_idx = np.zeros(n_qubits, dtype=int)
+    bifurcation_found = np.zeros(n_qubits, dtype=bool)
+    for i in range(n_qubits):
+        freq_step = np.abs(np.diff(min_freq[i]))
+        phase_step = np.abs(np.diff(min_phase[i]))
+        idx_freq = _first_threshold_crossing(freq_step)
+        idx_phase = _first_threshold_crossing(phase_step)
+        bif_idx[i] = min(idx_freq, idx_phase)
+        bifurcation_found[i] = bif_idx[i] < (n_powers - 1)
+        safe_idx[i] = max(0, bif_idx[i] - 2)
+
+    safe_power = powers[safe_idx]
+    safe_freq_detuning = min_freq[np.arange(n_qubits), safe_idx]
+    safe_freq_abs = safe_freq_detuning + base_freq
+    freq_shift = min_freq[:, -1] - min_freq[:, 0]
+
+    ds_fit = ds.assign(
+        min_freq=xr.DataArray(min_freq, dims=["qubit", "power"], coords={"qubit": ds.qubit, "power": powers}),
+        min_phase=xr.DataArray(min_phase, dims=["qubit", "power"], coords={"qubit": ds.qubit, "power": powers}),
+    ).assign_coords(
+        bif_idx=("qubit", bif_idx),
+        safe_idx=("qubit", safe_idx),
+        safe_power=("qubit", safe_power),
+        safe_freq_abs=("qubit", safe_freq_abs),
+    )
+
+    fit_results = {}
+    for i, q in enumerate(qubits):
+        success = bool(bifurcation_found[i])
+        error_code = (
+            ResonatorPunchOutErrorCode.SUCCESS if success else ResonatorPunchOutErrorCode.NO_SHIFT_DETECTED
+        )
+        fit_results[q.name] = FitParameters(
+            success=success,
+            resonator_frequency=float(safe_freq_abs[i]),
+            frequency_shift=float(freq_shift[i]),
+            optimal_power=float(safe_power[i]),
+            freq_low_abs=float(safe_freq_abs[i]),
+            error_code=int(error_code),
+        )
+
+    ds_fit = ds_fit.assign_coords(success=("qubit", bifurcation_found))
+    return ds_fit, fit_results
+
+
+# =========================
+# Shift-based fit logic (2 power points)
 # =========================
 
 def fit_raw_data(
@@ -160,9 +256,9 @@ def fit_raw_data(
 
     powers = ds.power.values
     if len(powers) != 2:
-        raise ValueError(
-            "Shift-based resonator analysis requires exactly 2 power points."
-        )
+        # Dense diagnostic sweep: locate the punch-out bifurcation directly
+        # instead of comparing only two power points.
+        return _fit_bifurcation_dense(ds, node)
 
     P_low, P_high = float(powers[0]), float(powers[-1])
     detuning = ds.detuning.values
@@ -172,6 +268,9 @@ def fit_raw_data(
 
     f0_array = np.full((n_qubits, n_powers), np.nan)
     chi2_array = np.full((n_qubits, n_powers), np.inf)
+    gamma_array = np.full((n_qubits, n_powers), np.nan)
+    amp_array = np.full((n_qubits, n_powers), np.nan)
+    offset_array = np.full((n_qubits, n_powers), np.nan)
 
     # Fit Lorentzian at each (qubit, power) combination.
     # power index 0 → low power (isel=0), power index 1 → high power (isel=-1).
@@ -180,9 +279,12 @@ def fit_raw_data(
     for i, q in enumerate(node.namespace["qubits"]):
         for j, p_isel in enumerate([0, -1]):
             data = ds.sel(qubit=q.name).isel(power=p_isel).IQ_abs.squeeze().values
-            f0, chi2 = _fit_lorentzian(detuning, data)
+            f0, chi2, gamma, amp, offset = _fit_lorentzian(detuning, data)
             f0_array[i, j] = f0
             chi2_array[i, j] = chi2
+            gamma_array[i, j] = gamma
+            amp_array[i, j] = amp
+            offset_array[i, j] = offset
 
     lorentz_f0 = xr.DataArray(
         f0_array,
@@ -195,6 +297,24 @@ def fit_raw_data(
         dims=["qubit", "power"],
         coords={"qubit": ds.qubit, "power": powers},
         attrs={"long_name": "Lorentzian fit residual chi-squared"},
+    )
+    lorentz_gamma = xr.DataArray(
+        gamma_array,
+        dims=["qubit", "power"],
+        coords={"qubit": ds.qubit, "power": powers},
+        attrs={"long_name": "Lorentzian fit FWHM", "units": "Hz"},
+    )
+    lorentz_amp = xr.DataArray(
+        amp_array,
+        dims=["qubit", "power"],
+        coords={"qubit": ds.qubit, "power": powers},
+        attrs={"long_name": "Lorentzian fit dip amplitude"},
+    )
+    lorentz_offset = xr.DataArray(
+        offset_array,
+        dims=["qubit", "power"],
+        coords={"qubit": ds.qubit, "power": powers},
+        attrs={"long_name": "Lorentzian fit baseline offset"},
     )
 
     freq_low = lorentz_f0.isel(power=0)    # fitted dip detuning at low power  (n_qubits,)
@@ -210,6 +330,9 @@ def fit_raw_data(
     ds_fit = ds.assign(
         lorentz_f0=lorentz_f0,
         lorentz_chi2=lorentz_chi2,
+        lorentz_gamma=lorentz_gamma,
+        lorentz_amp=lorentz_amp,
+        lorentz_offset=lorentz_offset,
     ).assign_coords(
         freq_shift=("qubit", freq_shift.data),
         freq_low=("qubit", freq_low.data),

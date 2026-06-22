@@ -153,9 +153,9 @@ with QualibrationGraph.build(
     # ── 5. T1 ─────────────────────────────────────────────────────────────────
     t1 = library.nodes["05_T1"].copy(
         name="T1",
-        num_shots=1000,
+        num_shots=200,
         min_wait_time_in_ns=16,
-        max_wait_time_in_ns=200_000,
+        max_wait_time_in_ns=500_000,
         wait_time_num_points=100,
         log_or_linear_sweep="linear",
     )

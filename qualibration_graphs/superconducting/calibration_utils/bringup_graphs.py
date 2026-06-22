@@ -227,15 +227,15 @@ def build_resonator_bringup(
             broad_res_spec = library.nodes["02d_broad_resonator_spectroscopy"].copy(
                 name="broad_resonator_spectroscopy",
                 multiplexed=p.multiplexed,
-                frequency_span_in_mhz=300.0,
+                frequency_span_in_mhz=100.0,
                 frequency_step_in_mhz=0.1,
                 num_shots=50,
                 peak_prominence=10.0,
-                peak_width=[1.0, 10.0],
+                peak_width=[1.0, 5.0],
                 peak_height=None,
                 peak_threshold=None,
                 blacklist_exclusion_radius_mhz=10.0,
-                readout_power_dbm=-20.0,
+                readout_power_dbm=0.0,
                 max_amp=0.1,
             )
             resonator_discovery.add_node(broad_res_spec)
@@ -264,16 +264,16 @@ def build_resonator_bringup(
         resonator_punch_out = library.nodes["02e_resonator_punch_out"].copy(
             name="resonator_punch_out",
             multiplexed=p.multiplexed,
-            frequency_span_in_mhz=80.0,
-            frequency_step_in_mhz=0.1,
-            min_power_dbm=-50,
-            max_power_dbm=-20,
-            num_power_points=2,
+            frequency_span_in_mhz=2.0,
+            frequency_step_in_mhz=0.01,
+            min_power_dbm=-20,
+            max_power_dbm=0,
+            num_power_points=10,
             max_amp=0.1,
-            num_shots=100,
+            num_shots=200,
             frequency_shift_threshold_in_hz=0.1e6,
             use_adaptive_span=p.use_adaptive_span,
-            sweep_left_offset_mhz=20.0,
+            sweep_left_offset_mhz=1.0,
         )
         resonator_bringup.add_node(resonator_punch_out)
         resonator_bringup.loop(
@@ -292,6 +292,7 @@ def build_resonator_bringup(
             readout_power_dbm=None,
             max_amp=0.1,
             save_readout_amplitude=True,
+            run_circle_fit=True,
         )
         resonator_bringup.add_node(low_power_res_spec)
 
@@ -345,14 +346,14 @@ def build_qubit_calibration(
             frequency_step_in_mhz=1.0,
             num_power_points=10,
             num_shots=100,
-            min_power_dbm=-80,
-            max_power_dbm=-20,
+            min_power_dbm=-60,
+            max_power_dbm=10,
             operation="saturation",
             operation_len_in_ns=20_000,
             linewidth_threshold_hz=1e6,
             max_amplitude_opx=0.24,
             min_amplitude_opx=0.01,
-            power_buffer_db=-10.0,
+            power_buffer_db=-0.0,
             signal_source="I_rot",
             peak_persistence_lookahead=0,
             peak_persistence_freq_tolerance_hz=5e6,
@@ -630,7 +631,7 @@ def build_x180_fine_calibration(
                 min_amp_factor=0.001,
                 max_amp_factor=1.99,
                 amp_factor_step=0.005,
-                num_shots=50,
+                num_shots=100,
                 operation="x180",
                 operation_length_in_ns=None,
                 max_number_pulses_per_sweep=1,
