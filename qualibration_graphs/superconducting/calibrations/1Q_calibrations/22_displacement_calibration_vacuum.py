@@ -155,6 +155,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     # program-build time (Python if, not a QUA conditional) so that the compiled
     # QUA program contains only the instructions that will actually be executed.
     subtract_baseline = node.parameters.subtract_baseline
+    dur_ns = node.parameters.displacement_pulse_duration_ns
 
     with program() as node.namespace["qua_program"]:
         # --- QUA variable declarations ---
@@ -224,7 +225,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         # align() with no args synchronises ALL QUA elements (including
                         # cavity_mode_drive, which is on a separate channel from xy/resonator).
                         align()
-                        cavity_mode.cavity_mode_drive.play("displacement", amplitude_scale=a)
+                        if dur_ns is not None:
+                            cavity_mode.cavity_mode_drive.play(
+                                "displacement", duration=dur_ns // 4, amplitude_scale=a
+                            )
+                        else:
+                            cavity_mode.cavity_mode_drive.play("displacement", amplitude_scale=a)
 
                         # NO qubit π-pulse here — the qubit stays in |g⟩.
                         # The readout captures only the cross-Kerr-induced IQ shift
@@ -274,7 +280,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     # so the cross-Kerr offset seen by the resonator is the same in both
                     # sub-sequences and cancels exactly upon subtraction).
                     align()
-                    cavity_mode.cavity_mode_drive.play("displacement", amplitude_scale=a)
+                    if dur_ns is not None:
+                        cavity_mode.cavity_mode_drive.play(
+                            "displacement", duration=dur_ns // 4, amplitude_scale=a
+                        )
+                    else:
+                        cavity_mode.cavity_mode_drive.play("displacement", amplitude_scale=a)
 
                     # Apply the qubit π-pulse AFTER the displacement.
                     # selective_x180: spectrally narrow, flips the qubit only when the
@@ -396,11 +407,21 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
 # %% {Update_state}
 @node.run_action(skip_if=node.parameters.simulate)
 def update_state(node: QualibrationNode[Parameters, Quam]):
+    """Calibrate alpha_max from the fitted sigma, or -- when use_adaptive is True
+    and the swept range didn't capture target_n_sigma * sigma -- escalate the
+    displacement amplitude (gain-locked) or, once amplitude headroom is
+    exhausted, the pulse duration, and force a graph-level retry.
+    """
+    from calibration_utils.error_codes import DisplacementVacuumErrorCode, DisplacementVacuumCorrectiveAction
+    from calibration_utils.power_lock import set_locked_output_power
+
     cavity_mode = node.namespace["cavity_mode"]
     base_amp = float(cavity_mode.cavity_mode_drive.operations["displacement"].amplitude)
 
     MAX_VOLTAGE = 0.5      # OPX+ DAC ceiling [V]
     AMP_SCALE_LIMIT = 1.9  # firmware headroom (max safe amplitude_scale < 2.0)
+    _MIN_PULSE_LENGTH_NS = 16
+    target_n_sigma = node.parameters.target_n_sigma
 
     with node.record_state_updates():
         for qubit in node.namespace["qubits"]:
@@ -409,7 +430,73 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 continue
 
             sigma = res["sigma"]
+            error_code = DisplacementVacuumErrorCode(
+                res.get("error_code", int(DisplacementVacuumErrorCode.SUCCESS))
+            )
+            mode_name = node.parameters.mode_name
+            pair_key = f"{qubit.name}_{mode_name}"
+            pairs = getattr(node.machine, "cavity_transmon_pairs", None)
 
+            # ── Adaptive: escalate amplitude (gain-locked) or duration ──────────
+            if node.parameters.use_adaptive and error_code == DisplacementVacuumErrorCode.INSUFFICIENT_RANGE_COVERAGE:
+                # Required base-amplitude scale factor so that, at the current
+                # AMP_SCALE_LIMIT, the sweep would cover target_n_sigma * sigma:
+                # sigma scales as 1/base_amp for fixed photon number, so raising
+                # base_amp by this factor shrinks sigma (in amplitude_scale units)
+                # by the same factor.
+                required_scale_factor = (target_n_sigma * sigma) / AMP_SCALE_LIMIT
+                desired_base_amp = base_amp * required_scale_factor
+
+                escalated_amplitude = False
+                if desired_base_amp <= MAX_VOLTAGE:
+                    try:
+                        current_power_dbm = cavity_mode.cavity_mode_drive.get_output_power("displacement")
+                        desired_power_dbm = current_power_dbm + 20 * np.log10(desired_base_amp / base_amp)
+                        # Gain-locked: only the operation's amplitude (Volts) changes,
+                        # never Octave gain / full_scale_power_dbm.
+                        set_locked_output_power(
+                            cavity_mode.cavity_mode_drive,
+                            power_in_dbm=desired_power_dbm,
+                            operation="displacement",
+                        )
+                        new_base_amp = float(cavity_mode.cavity_mode_drive.operations["displacement"].amplitude)
+                        node.log(
+                            f"[Adaptive] {qubit.name}: INSUFFICIENT_RANGE_COVERAGE "
+                            f"(coverage={res['coverage_ratio']:.2f}σ < {target_n_sigma}σ). "
+                            f"Raising displacement base amplitude (gain-locked): "
+                            f"{base_amp:.4f} V -> {new_base_amp:.4f} V."
+                        )
+                        res["corrective_action"] = int(DisplacementVacuumCorrectiveAction.INCREASE_AMPLITUDE_HEADROOM)
+                        res["action_magnitude"] = new_base_amp
+                        escalated_amplitude = True
+                    except ValueError:
+                        escalated_amplitude = False
+
+                if not escalated_amplitude:
+                    # Stage 2: amplitude headroom exhausted -- escalate duration instead.
+                    current_len_ns = node.parameters.displacement_pulse_duration_ns or float(
+                        cavity_mode.cavity_mode_drive.operations["displacement"].length
+                    )
+                    growth_factor = max(target_n_sigma / max(res["coverage_ratio"], 1e-6), 1.0)
+                    # Pulse area (and thus photon number for fixed amplitude_scale) grows
+                    # linearly with duration for the flat-top displacement pulse, the
+                    # cavity-displacement analogue of the rotation-angle argument used
+                    # for duration escalation in 04b_power_rabi.py.
+                    new_len_ns = int(round(current_len_ns * growth_factor / 4) * 4)
+                    new_len_ns = max(new_len_ns, _MIN_PULSE_LENGTH_NS)
+                    node.parameters.displacement_pulse_duration_ns = new_len_ns
+                    node.log(
+                        f"[Adaptive] {qubit.name}: INSUFFICIENT_RANGE_COVERAGE, amplitude headroom "
+                        f"exhausted. Increasing displacement pulse duration: "
+                        f"{current_len_ns:.0f} ns -> {new_len_ns} ns."
+                    )
+                    res["corrective_action"] = int(DisplacementVacuumCorrectiveAction.INCREASE_DURATION)
+                    res["action_magnitude"] = float(new_len_ns)
+
+                node.outcomes[qubit.name] = "failed"  # force graph-level retry
+                continue
+
+            # ── Full coverage achieved (or use_adaptive=False): calibrate alpha_max ──
             # Auto-compute alpha_max: fill DAC to MAX_VOLTAGE / AMP_SCALE_LIMIT ≈ 0.263 V.
             # amplitude_scale=1 → alpha_max photons; firmware limit AMP_SCALE_LIMIT gives
             # max accessible alpha = alpha_max * AMP_SCALE_LIMIT.
@@ -418,9 +505,6 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
 
             cavity_mode.cavity_mode_drive.operations["displacement"].amplitude = float(cal_amplitude)
 
-            mode_name = node.parameters.mode_name
-            pair_key = f"{qubit.name}_{mode_name}"
-            pairs = getattr(node.machine, "cavity_transmon_pairs", None)
             if pairs is not None and pair_key in pairs:
                 if hasattr(pairs[pair_key], "displacement_alpha_max"):
                     pairs[pair_key].displacement_alpha_max = float(alpha_max)
@@ -428,11 +512,18 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 if hasattr(pairs[pair_key], "displacement_k"):
                     pairs[pair_key].displacement_k = float(k_fit)
 
+            if node.parameters.use_adaptive:
+                # Reset the duration override now that escalation has converged,
+                # so a future re-run of this node starts fresh.
+                node.parameters.displacement_pulse_duration_ns = None
+                res["corrective_action"] = int(DisplacementVacuumCorrectiveAction.NONE)
+
             node.log(
                 f"Displacement calibration: sigma={sigma:.4f}, alpha_max={alpha_max:.3f}, "
                 f"stored amplitude={cal_amplitude:.6f} V  "
                 f"(amplitude_scale=1 -> {alpha_max:.2f} photons, "
-                f"max safe alpha={alpha_max * AMP_SCALE_LIMIT:.2f})"
+                f"max safe alpha={alpha_max * AMP_SCALE_LIMIT:.2f}, "
+                f"coverage={res['coverage_ratio']:.2f}σ)"
             )
 
             break  # one cavity mode shared across all qubits in this run

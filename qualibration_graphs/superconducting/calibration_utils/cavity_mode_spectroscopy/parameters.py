@@ -32,6 +32,13 @@ class NodeSpecificParameters(RunnableParameters):
     """True → measure qubit state (recommended). False → measure raw I/Q."""
     min_dip_fraction: float = 0.05
     """Minimum dip depth as a fraction of the signal range. Shallower dips are rejected."""
+    subtract_baseline: bool = True
+    """If True, run a second sub-sequence per frequency point WITHOUT the qubit
+    probe pulse and subtract its averaged IQ from the signal IQ before any
+    state-discrimination threshold is applied -- removes the amplitude/frequency-
+    dependent IQ offset caused by the cavity probe drive leaking into the
+    readout, the same artifact handled in displacement_calibration_vacuum.
+    If False, only the original single-sequence protocol runs."""
     cavity_thermalization_time_ns: Optional[int] = None
     """Override the cavity thermalization wait time [ns]. When set, this value is used
     instead of cavity_mode.T1 × cavity_mode.thermalization_time_factor.

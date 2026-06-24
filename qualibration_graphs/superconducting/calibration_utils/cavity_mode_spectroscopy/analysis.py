@@ -56,11 +56,75 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
 
 
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
-    """Convert I/Q to Volts (if not using state discrimination) and add full_freq coord."""
-    if not node.parameters.use_state_discrimination:
-        ds = convert_IQ_to_V(ds, node.namespace["qubits"])
+    """Convert raw IQ streams to physical units and, when subtract_baseline=True,
+    remove the cavity-probe-drive-induced IQ offset before any thresholding.
+
+    subtract_baseline = True  (dual-sequence, drive-leakage correction)
+    ----------------------------------------------------------------
+    The QUA program acquires two independent sub-sequences per detuning point:
+      * Signal   (I, Q)   - cavity probe drive + qubit probe pulse.
+      * Baseline (Ib, Qb) - cavity probe drive + NO qubit probe pulse.
+
+    I_corr(f) = I(f) - Ib(f), Q_corr(f) = Q(f) - Qb(f), in Volts, before any
+    threshold. Removes the drive-induced offset that otherwise produces
+    spurious peaks at higher probe power (mirrors
+    displacement_calibration_vacuum's baseline subtraction).
+
+    If use_state_discrimination is True, a continuous excitation-probability
+    estimate is derived from I_corr by normalising against the points with
+    the largest |detuning| (expected off-resonance, where the qubit should be
+    fully excited by the probe pulse) -- the mirror image of
+    displacement_calibration_vacuum's "points closest to a=0" reference.
+
+    subtract_baseline = False  (original single-sequence)
+    -------------------------------------------------------
+    Unchanged: per-shot QUA state discrimination, or raw I in Volts.
+    """
+    qubits = node.namespace["qubits"]
+
+    if node.parameters.subtract_baseline:
+        ds = convert_IQ_to_V(ds, qubits, IQ_list=["I", "Q", "Ib", "Qb"])
+        ds = ds.assign(
+            I=ds["I"] - ds["Ib"],
+            Q=ds["Q"] - ds["Qb"],
+        )
+
+        if node.parameters.use_state_discrimination:
+            state_arrays = []
+            detuning_values = ds["detuning"].values
+
+            for q in qubits:
+                I_q = ds["I"].sel(qubit=q.name)
+
+                # Reference "peak" (fully excited, no dispersive shift) from
+                # the tail of the detuning sweep -- the edges are expected to
+                # be off-resonance.
+                n_peak = max(1, len(detuning_values) // 10)
+                peak_idx = np.argsort(np.abs(detuning_values))[-n_peak:]
+                peak = float(I_q.values[peak_idx].mean())
+
+                if abs(peak) < 1e-9:
+                    state_q = xr.DataArray(
+                        I_q.values.copy(), coords=I_q.coords, dims=I_q.dims,
+                    )
+                else:
+                    state_q = xr.DataArray(
+                        np.clip(I_q.values / peak, 0.0, 1.0),
+                        coords=I_q.coords,
+                        dims=I_q.dims,
+                    )
+
+                state_arrays.append(state_q)
+
+            state = xr.concat(state_arrays, dim="qubit").assign_coords(qubit=ds.qubit)
+            ds = ds.assign(state=state)
+            ds = apply_confusion_correction_to_dataset(ds, node)
     else:
-        ds = apply_confusion_correction_to_dataset(ds, node)
+        if not node.parameters.use_state_discrimination:
+            ds = convert_IQ_to_V(ds, qubits)
+        else:
+            ds = apply_confusion_correction_to_dataset(ds, node)
+
     cavity_mode = _get_cavity_mode(node)
     rf_freq = cavity_mode.cavity_mode_drive.RF_frequency
     full_freq = np.array(

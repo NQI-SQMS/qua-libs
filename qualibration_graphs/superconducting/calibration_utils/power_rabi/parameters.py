@@ -34,10 +34,6 @@ class NodeSpecificParameters(BasePowerRabiParameters):
     """Maximum number of Rabi pulses per sweep (error amplification). Default is 1."""
     update_x90: bool = True
     """Flag to update the x90 pulse amplitude after calibrating x180. Default is True."""
-    octave_gain_step_db: float = 3.0
-    """Maximum Octave gain increase (dB) per adaptive iteration when the base amplitude
-    is already at its hardware limit.  Capped at this value to avoid large power
-    jumps between iterations.  Only used when use_adaptive=True."""
     use_adaptive: bool = False
     """Enable adaptive calibration. When True:
     - If no oscillation is found, the current qubit frequency is added to the blacklist in temp_calibration.

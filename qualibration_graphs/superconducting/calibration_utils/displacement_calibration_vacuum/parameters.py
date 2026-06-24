@@ -47,6 +47,20 @@ class NodeSpecificParameters(RunnableParameters):
     matching the original behaviour with no cross-Kerr correction."""
     use_state_discrimination: bool = True
     """True → measure qubit state (0/1). False → measure raw I quadrature."""
+    target_n_sigma: float = 5.0
+    """Target Gaussian-tail coverage: when use_adaptive is True, the adaptive
+    loop tries to ensure the swept amplitude_scale range reaches at least
+    target_n_sigma * sigma_fit before accepting the calibration as final."""
+    displacement_pulse_duration_ns: Optional[int] = None
+    """Override the displacement pulse duration [ns] (must be a multiple of
+    4 ns). None -> use the calibrated/default pulse length. Set automatically
+    by the adaptive escalation in update_state once amplitude headroom
+    (AMP_SCALE_LIMIT) is exhausted; mirrors the identical parameter in
+    28_displacement_calibration_pnrs.py."""
+    use_adaptive: bool = False
+    """Enable the amplitude/duration escalation loop in update_state (mirrors
+    04b_power_rabi.py's use_adaptive). When False, update_state behaves
+    exactly as before (single fixed-amplitude calibration, no escalation)."""
     normalize_plot: bool = False
     """When True and use_state_discrimination=False, normalize the plotted I signal
     to [0, 1] so the peak at a=0 is 1 and the baseline is 0.

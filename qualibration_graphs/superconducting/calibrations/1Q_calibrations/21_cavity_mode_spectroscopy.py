@@ -108,12 +108,23 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         ),
     }
 
+    subtract_baseline = node.parameters.subtract_baseline
+
     with program() as node.namespace["qua_program"]:
         I, I_st, Q, Q_st, n, n_st = node.machine.declare_qua_variables()
         f = declare(int)
         if node.parameters.use_state_discrimination:
             state = [declare(int) for _ in range(num_qubits)]
             state_st = [declare_stream() for _ in range(num_qubits)]
+
+        # I_base/Q_base: baseline sub-sequence (no qubit probe pulse), only
+        # declared when subtract_baseline=True. Mirrors the dual-sequence
+        # pattern in 22_displacement_calibration_vacuum.py.
+        if subtract_baseline:
+            I_base = [declare(fixed) for _ in range(num_qubits)]
+            Q_base = [declare(fixed) for _ in range(num_qubits)]
+            I_base_st = [declare_stream() for _ in range(num_qubits)]
+            Q_base_st = [declare_stream() for _ in range(num_qubits)]
 
         for multiplexed_qubits in qubits.batch():
             for qubit in multiplexed_qubits.values():
@@ -132,6 +143,38 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                 with for_(*from_array(f, dfs)):
                     for i, qubit in multiplexed_qubits.items():
+                        # ====================================================
+                        # PART 1 -- BASELINE (only when subtract_baseline=True)
+                        # ====================================================
+                        # Captures whatever the cavity probe drive itself does
+                        # to the readout IQ at this frequency/amplitude, with
+                        # NO qubit probe pulse -- removes the drive-induced
+                        # offset that otherwise produces spurious peaks at
+                        # higher probe power.
+                        if subtract_baseline:
+                            cavity_mode.cavity_mode_drive.wait(therm_clk)
+                            qubit.xy.wait(2 * qubit.thermalization_time // 4)
+                            align()
+                            qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
+                            cavity_mode.cavity_mode_drive.update_frequency(
+                                cavity_mode.cavity_mode_drive.intermediate_frequency + f
+                            )
+                            if op_len is not None:
+                                cavity_mode.cavity_mode_drive.play(
+                                    op, amplitude_scale=amp_factor, duration=op_len >> 2,
+                                )
+                            else:
+                                cavity_mode.cavity_mode_drive.play(op, amplitude_scale=amp_factor)
+                            # NO qubit probe pulse here.
+                            align()
+                            qubit.resonator.measure("readout", qua_vars=(I_base[i], Q_base[i]))
+                            save(I_base[i], I_base_st[i])
+                            save(Q_base[i], Q_base_st[i])
+                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+
+                        # ====================================================
+                        # PART 2 -- SIGNAL (always executed)
+                        # ====================================================
                         # Thermalise cavity and qubit before each point.
                         cavity_mode.cavity_mode_drive.wait(therm_clk)
                         qubit.xy.wait(2 * qubit.thermalization_time // 4)
@@ -182,6 +225,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 Q_st[i].buffer(len(dfs)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
                     state_st[i].buffer(len(dfs)).average().save(f"state{i + 1}")
+                if subtract_baseline:
+                    I_base_st[i].buffer(len(dfs)).average().save(f"Ib{i + 1}")
+                    Q_base_st[i].buffer(len(dfs)).average().save(f"Qb{i + 1}")
 
 
 # %% {Simulate}
