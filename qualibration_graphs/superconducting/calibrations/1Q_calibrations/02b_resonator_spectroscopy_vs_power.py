@@ -21,6 +21,7 @@ from calibration_utils.resonator_spectroscopy_vs_amplitude import (
     plot_raw_data_with_fit,
 )
 from quam_builder.tools.power_tools import calculate_voltage_scaling_factor
+from calibration_utils.power_lock import set_locked_output_power
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.runtime import simulate_and_plot
 from qualibration_libs.data import XarrayDataFetcher
@@ -84,10 +85,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     node.namespace["tracked_resonators"] = []
     for i, qubit in enumerate(qubits):
         with tracked_updates(qubit.resonator, auto_revert=False, dont_assign_to_none=True) as resonator:
-            resonator.set_output_power(
-                power_in_dbm=node.parameters.max_power_dbm,
-                max_amplitude=node.parameters.max_amp,
-            )
+            set_locked_output_power(resonator, power_in_dbm=node.parameters.max_power_dbm)
             node.namespace["tracked_resonators"].append(resonator)
 
     # Extract the sweep parameters and axes from the node parameters
@@ -247,9 +245,8 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 continue
 
             # Update the readout power
-            q.resonator.set_output_power(
-                power_in_dbm=node.results["fit_results"][q.name]["optimal_power"],
-                max_amplitude=node.parameters.max_amp,
+            set_locked_output_power(
+                q.resonator, power_in_dbm=node.results["fit_results"][q.name]["optimal_power"]
             )
             # Update the readout frequency for the given flux point
             q.resonator.f_01 += node.results["fit_results"][q.name]["frequency_shift"]

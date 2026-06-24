@@ -162,6 +162,46 @@ class PowerRabiCorrectiveAction(IntEnum):
 
 
 # =========================
+# Displacement Vacuum Calibration Error Codes
+# =========================
+
+class DisplacementVacuumErrorCode(IntEnum):
+    """Error codes for the displacement vacuum-population calibration (node 22)."""
+
+    SUCCESS = 0
+    """Calibration succeeded - Gaussian fit converged and the swept amplitude
+    range covered at least target_n_sigma * sigma_fit."""
+
+    FIT_FAILED = 1
+    """The Gaussian fit did not converge or gave a non-physical sigma/amplitude."""
+
+    INSUFFICIENT_RANGE_COVERAGE = 2
+    """Fit converged but the swept amplitude_scale range did not reach
+    target_n_sigma * sigma_fit -- the Gaussian tail was not adequately sampled."""
+
+
+class DisplacementVacuumCorrectiveAction(IntEnum):
+    """Corrective actions for the displacement vacuum-population calibration."""
+
+    NONE = 0
+    """No action needed - full coverage achieved, alpha_max calibrated normally."""
+
+    INCREASE_AMPLITUDE_HEADROOM = 10
+    """Raising the displacement operation's base amplitude (Volts) via the
+    gain-locked set_locked_output_power helper so a given amplitude_scale
+    reaches more photons, allowing target_n_sigma to be captured within the
+    existing AMP_SCALE_LIMIT-bounded amplitude_scale range. Octave/FEM gain
+    is never touched."""
+
+    INCREASE_DURATION = 20
+    """Increasing the displacement pulse duration once amplitude headroom
+    (AMP_SCALE_LIMIT / DAC ceiling) is exhausted."""
+
+    RESET_ADAPTIVE_PARAMS = 99
+    """Resetting all adaptive parameters after successful calibration."""
+
+
+# =========================
 # Helper Functions
 # =========================
 

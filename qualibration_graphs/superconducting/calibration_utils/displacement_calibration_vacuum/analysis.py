@@ -27,6 +27,7 @@ import xarray as xr
 from scipy.optimize import curve_fit
 
 from qualibrate import QualibrationNode
+from calibration_utils.error_codes import DisplacementVacuumErrorCode
 from qualibration_libs.data import convert_IQ_to_V
 try:
     from qualibration_libs.data import apply_confusion_correction_to_dataset
@@ -44,6 +45,10 @@ class FitParameters:
     """Fitted peak amplitude (ideally ~0.5 for perfect selective π-flip contrast)."""
     offset: float
     """Fitted baseline (ideally ~0 for perfect state discrimination)."""
+    coverage_ratio: float
+    """current_amp_max_scale / sigma_fit -- how many sigma the swept range covered."""
+    error_code: int
+    """DisplacementVacuumErrorCode value."""
     success: bool
 
 
@@ -54,7 +59,8 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
         status = "SUCCESS" if res["success"] else "FAIL"
         log_callable(
             f"[35] {q}: {status} | A_1ph (sigma) = {res['sigma']:.4f} "
-            f"| amplitude = {res['amplitude']:.3f} | offset = {res['offset']:.3f}"
+            f"| amplitude = {res['amplitude']:.3f} | offset = {res['offset']:.3f} "
+            f"| coverage = {res['coverage_ratio']:.2f}σ"
         )
 
 
@@ -217,12 +223,14 @@ def fit_raw_data(
     #   f(a) = amplitude · exp(-(a/sigma)²) + offset
     # and yields the same sigma; only the amplitude scale differs.
     signal_name = "state" if node.parameters.use_state_discrimination else "I"
+    target_n_sigma = node.parameters.target_n_sigma
     fit_results: Dict[str, FitParameters] = {}
 
     for q in ds.qubit.values:
         ds_q = ds.sel(qubit=q)
         a_arr = ds_q.amp.values.astype(float)
         signal = ds_q[signal_name].values.astype(float)
+        current_amp_max_scale = float(np.abs(a_arr).max())
 
         # Initial guesses
         # Use the tails at both ends for offset (works for symmetric or positive-only scans)
@@ -247,23 +255,44 @@ def fit_raw_data(
                 maxfev=10000,
             )
             amplitude_fit, sigma_fit, offset_fit = popt
-            success = bool(
+            fit_ok = bool(
                 np.isfinite(sigma_fit)
                 and sigma_fit > 0
                 and amplitude_fit > 0.02  # require at least ~2% contrast
             )
-            fit_results[str(q)] = FitParameters(
-                sigma=float(sigma_fit),
-                amplitude=float(amplitude_fit),
-                offset=float(offset_fit),
-                success=success,
-            )
         except Exception:
+            amplitude_fit = sigma_fit = offset_fit = float("nan")
+            fit_ok = False
+
+        if not fit_ok:
             fit_results[str(q)] = FitParameters(
                 sigma=float("nan"),
                 amplitude=float("nan"),
                 offset=float("nan"),
+                coverage_ratio=float("nan"),
+                error_code=int(DisplacementVacuumErrorCode.FIT_FAILED),
                 success=False,
             )
+            continue
+
+        coverage_ratio = current_amp_max_scale / sigma_fit if sigma_fit > 0 else 0.0
+        needs_more_range = coverage_ratio < target_n_sigma
+
+        fit_results[str(q)] = FitParameters(
+            sigma=float(sigma_fit),
+            amplitude=float(amplitude_fit),
+            offset=float(offset_fit),
+            coverage_ratio=float(coverage_ratio),
+            error_code=int(
+                DisplacementVacuumErrorCode.INSUFFICIENT_RANGE_COVERAGE
+                if needs_more_range else DisplacementVacuumErrorCode.SUCCESS
+            ),
+            # "success" means the fit itself converged and is usable -- NOT that
+            # the calibration is fully converged. update_state branches on
+            # error_code (not success) to decide whether to escalate
+            # amplitude/duration and retry, mirroring how should_repeat_rabi_amplitude
+            # relies on error_code rather than node.outcomes for power_rabi.
+            success=True,
+        )
 
     return ds, fit_results

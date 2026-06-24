@@ -18,7 +18,7 @@ from calibration_utils.readout_frequency_amplitude_optimization import (
     process_raw_dataset,
     fit_raw_data,
     log_fitted_results,
-    plot_fidelity_2d,
+    plot_fidelity_map,
 )
 from calibration_utils.iq_blobs.plotting import plot_iq_blobs, plot_confusion_matrices, plot_historams
 from qualibration_libs.parameters import get_qubits
@@ -28,13 +28,12 @@ from qualibration_libs.data import XarrayDataFetcher
 
 # %% {Description}
 description = """
-        READOUT OPTIMIZATION: FREQUENCY AND AMPLITUDE (2D)
+        READOUT OPTIMISATION: FREQUENCY x AMPLITUDE
 The sequence consists in measuring the state of the resonator after thermalization (qubit in |g>) and after
-playing a pi pulse to the qubit (qubit in |e>) successively while sweeping both the readout frequency and the
-readout amplitude.
-The 'I' & 'Q' quadratures when the qubit is in |g> and |e> are extracted to derive the readout fidelity for each
-(frequency, amplitude) combination. The optimal readout frequency and amplitude are chosen as to maximize the
-readout fidelity.
+playing a pi pulse to the qubit (qubit in |e>) successively while jointly sweeping the readout frequency and
+the readout amplitude. The 'I' & 'Q' quadratures when the qubit is in |g> and |e> are extracted at every
+frequency/amplitude point to derive the readout fidelity. The optimal readout frequency and amplitude are
+jointly chosen as to maximize the readout fidelity.
 
 Prerequisites:
     - Having calibrated the readout parameters (nodes 02a, 02b and/or 02c).
@@ -46,7 +45,7 @@ State update:
     - The integration weight angle: qubit.resonator.operations["readout"].integration_weights_angle
     - the ge discrimination threshold: qubit.resonator.operations["readout"].threshold
     - the Repeat Until Success threshold: qubit.resonator.operations["readout"].rus_exit_threshold
-    - The confusion matrix: qubit.resonator.operations["readout"].confusion_matrix
+    - The confusion matrix: qubit.resonator.confusion_matrix
 """
 
 
@@ -83,11 +82,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     n_runs = node.parameters.num_shots  # Number of runs
     # The frequency sweep around the resonator resonance frequency
     span = node.parameters.frequency_span_in_mhz * u.MHz
-    step = node.parameters.frequency_step_in_mhz * u.MHz
-    dfs = np.arange(-span / 2, +span / 2, step)
-    # The readout amplitude sweep (as a pre-factor of the readout amplitude)
-    amps = np.linspace(node.parameters.start_amp, node.parameters.end_amp, node.parameters.num_amps)
-
+    dfs = np.linspace(-span / 2, +span / 2, node.parameters.frequency_num_points)
+    # The readout amplitude sweep, as a log-spaced prefactor of the nominal readout amplitude
+    amps = np.logspace(
+        np.log10(node.parameters.min_amp_factor),
+        np.log10(node.parameters.max_amp_factor),
+        node.parameters.num_amps,
+    )
     # Register the sweep axes to be added to the dataset when fetching data
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
@@ -95,12 +96,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         "detuning": xr.DataArray(dfs, attrs={"long_name": "readout frequency", "units": "Hz"}),
         "amp_prefactor": xr.DataArray(amps, attrs={"long_name": "readout amplitude", "units": ""}),
     }
-
     with program() as node.namespace["qua_program"]:
         Ig, Ig_st, Qg, Qg_st, n, n_st = node.machine.declare_qua_variables()
         Ie, Ie_st, Qe, Qe_st, _, _ = node.machine.declare_qua_variables()
-        a = declare(fixed)
         df = declare(int)
+        a = declare(fixed)
 
         for multiplexed_qubits in qubits.batch():
             # Initialize the QPU in terms of flux points (flux tunable transmons and/or tunable couplers)
@@ -113,7 +113,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 with for_(*from_array(df, dfs)):
                     # --- Frequency detuning ---
                     for i, qubit in multiplexed_qubits.items():
-                        # Update the resonator frequencies
+                        # Update the resonator frequencies for all resonators
                         update_frequency(qubit.resonator.name, df + qubit.resonator.intermediate_frequency)
 
                     with for_(*from_array(a, amps)):
@@ -228,7 +228,7 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def plot_data(node: QualibrationNode[Parameters, Quam]):
     """Plot the raw and fitted data in specific figures whose shape is given by qubit.grid_location."""
-    fig_fidelity = plot_fidelity_2d(node.results["ds_fit"], node.namespace["qubits"], node.results["ds_fit"])
+    fig_fidelity_map = plot_fidelity_map(node.results["ds_fit"], node.namespace["qubits"])
     fig_iq = plot_iq_blobs(node.results["ds_raw"], node.namespace["qubits"], node.results["ds_iq_blobs"])
     fig_confusion = plot_confusion_matrices(
         node.results["ds_raw"], node.namespace["qubits"], node.results["ds_iq_blobs"]
@@ -237,7 +237,7 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
     plt.show()
     # Store the generated figures
     node.results["figures"] = {
-        "fidelity_2d": fig_fidelity,
+        "fidelity_map": fig_fidelity_map,
         "iq_blobs": fig_iq,
         "confusion_matrix": fig_confusion,
         "histograms": fig_histogram,
@@ -254,15 +254,15 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 continue
 
             fit_results = node.results["fit_results"][q.name]
-            # Update the readout frequency
+            # Readout frequency
             q.resonator.f_01 = fit_results["optimal_frequency"]
             q.resonator.RF_frequency = fit_results["optimal_frequency"]
-            # Update the readout amplitude and discrimination parameters
+            # Readout amplitude and discrimination parameters
             operation = q.resonator.operations["readout"]
+            operation.amplitude = fit_results["optimal_amplitude"]
             operation.integration_weights_angle -= float(fit_results["iw_angle"])
             operation.threshold = float(fit_results["ge_threshold"]) * operation.length / 2**12
             operation.rus_exit_threshold = float(fit_results["rus_threshold"]) * operation.length / 2**12
-            operation.amplitude = float(fit_results["optimal_amplitude"])
             q.resonator.confusion_matrix = fit_results["confusion_matrix"]
 
 

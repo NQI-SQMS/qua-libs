@@ -14,6 +14,7 @@ from qualang_tools.units import unit
 
 from qualibrate import QualibrationNode
 from quam_builder.tools.power_tools import calculate_voltage_scaling_factor
+from calibration_utils.power_lock import set_locked_output_power
 from qualibration_libs.core import tracked_updates
 from quam_config import Quam
 from calibration_utils.displacement_calibration_pnrs import (
@@ -115,11 +116,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     # Set cavity drive to max power (tracked so it can be reverted after the experiment)
     node.namespace["tracked_drives"] = []
     with tracked_updates(cavity_mode.cavity_mode_drive, auto_revert=False, dont_assign_to_none=True) as cav_drive:
-        cav_drive.set_output_power(
-            power_in_dbm=node.parameters.max_power_dbm,
-            max_amplitude=node.parameters.max_amp,
-            operation="displacement",
-        )
+        set_locked_output_power(cav_drive, power_in_dbm=node.parameters.max_power_dbm, operation="displacement")
         node.namespace["tracked_drives"].append(cav_drive)
 
     # Amplitude prefactors: logarithmically spaced from min_power to max_power

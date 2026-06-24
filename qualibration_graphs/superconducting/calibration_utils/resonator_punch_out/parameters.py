@@ -23,7 +23,14 @@ class NodeSpecificParameters(RunnableParameters):
     """Higher readout power (used to test Kerr shift). Default is -25 dBm."""
 
     num_power_points: int = 2
-    """Number of power points. Must be exactly 2 for shift-based analysis."""
+    """Number of power points.
+
+    With exactly 2 points (default), uses the fast shift-based analysis: compares
+    the Lorentzian dip position at low vs. high power, with adaptive retry support.
+
+    With more than 2 points, runs a dense diagnostic sweep instead: locates the
+    punch-out bifurcation directly from the resonance-vs-power curve (2D heatmap
+    plot) and picks a safe operating power 2 steps before the bifurcation."""
 
     max_amp: float = 0.1
     """Maximum readout amplitude for the experiment. Default is 0.1."""

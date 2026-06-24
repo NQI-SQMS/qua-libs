@@ -27,6 +27,7 @@ from calibration_utils.error_codes import (
     QubitSpectroscopyErrorCode,
     QubitSpectroscopyCorrectiveAction,
 )
+from calibration_utils.power_lock import set_locked_output_power
 
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.data import XarrayDataFetcher
@@ -145,9 +146,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     node.namespace["tracked_qubits"] = []
     for qubit in qubits:
         with tracked_updates(qubit.xy, auto_revert=False) as xy:
-            xy.set_output_power(
+            set_locked_output_power(
+                xy,
                 power_in_dbm=node.parameters.max_power_dbm,
-                max_amplitude=node.parameters.max_amplitude_opx,
                 operation=node.parameters.operation,
             )
             node.namespace["tracked_qubits"].append(xy)
@@ -504,63 +505,34 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             # Update XY output power
             # -----------------------------
             # x180: set to the broadening-fit power (short pi pulse for time Rabi).
-            # saturation: set to the spectroscopy selected power (with buffer),
-            #             using the SAME Octave gain as x180 so the gain never
-            #             needs changing between nodes.
+            # saturation: set to the spectroscopy selected power (with buffer).
+            # Both operations share the same channel gain/full_scale_power, which is
+            # fixed at QUAM-population time and never touched here -- only the
+            # operation amplitude is solved for.
             x180_power_dbm = node.results["fit_results"][q.name].get("x180_power_dbm", float("nan"))
 
             if np.isfinite(x180_power_dbm):
-                # Step 1: set x180 → determines the Octave/FEM gain.
                 # The extrapolated x180 power may exceed the hardware ceiling
                 # (e.g. 10 dBm on MW-FEM channels).  Fall back to max_power_dbm
                 # if set_output_power rejects the value.
                 try:
-                    new_power_settings = q.xy.set_output_power(
-                        power_in_dbm=x180_power_dbm,
-                        max_amplitude=node.parameters.max_amplitude_opx,
-                        operation="x180",
-                    )
+                    new_power_settings = set_locked_output_power(q.xy, power_in_dbm=x180_power_dbm, operation="x180")
                 except ValueError:
                     node.log(
                         f"[{q.name}] x180 power {x180_power_dbm:.1f} dBm exceeds hardware "
                         f"limit; clamping to max_power_dbm = {node.parameters.max_power_dbm:.1f} dBm"
                     )
                     x180_power_dbm = node.parameters.max_power_dbm
-                    new_power_settings = q.xy.set_output_power(
-                        power_in_dbm=x180_power_dbm,
-                        max_amplitude=node.parameters.max_amplitude_opx,
-                        operation="x180",
-                    )
-                # Step 2: set saturation at selected_power using the same
-                # gain/full_scale_power already written to the channel by step 1.
-                if hasattr(q.xy, "frequency_converter_up"):
-                    # IQ + Octave (OPX+): lock the Octave gain
-                    q.xy.set_output_power(
-                        power_in_dbm=selected_power_dbm,
-                        gain=q.xy.frequency_converter_up.gain,
-                        operation=node.parameters.operation,
-                    )
-                else:
-                    # MW-FEM (OPX1000): lock the full_scale_power_dbm
-                    q.xy.set_output_power(
-                        power_in_dbm=selected_power_dbm,
-                        full_scale_power_dbm=q.xy.opx_output.full_scale_power_dbm,
-                        operation=node.parameters.operation,
-                    )
+                    new_power_settings = set_locked_output_power(q.xy, power_in_dbm=x180_power_dbm, operation="x180")
+                set_locked_output_power(q.xy, power_in_dbm=selected_power_dbm, operation=node.parameters.operation)
                 power_source = "x180 from broadening fit; saturation at selected power"
                 drive_power_dbm = x180_power_dbm  # used for logging / temp_data
             else:
                 # Fallback: both at selected power.
-                new_power_settings = q.xy.set_output_power(
-                    power_in_dbm=selected_power_dbm,
-                    max_amplitude=node.parameters.max_amplitude_opx,
-                    operation=node.parameters.operation,
+                new_power_settings = set_locked_output_power(
+                    q.xy, power_in_dbm=selected_power_dbm, operation=node.parameters.operation
                 )
-                q.xy.set_output_power(
-                    power_in_dbm=selected_power_dbm,
-                    max_amplitude=node.parameters.max_amplitude_opx,
-                    operation="x180",
-                )
+                set_locked_output_power(q.xy, power_in_dbm=selected_power_dbm, operation="x180")
                 power_source = "selected power (fallback)"
                 drive_power_dbm = selected_power_dbm
 

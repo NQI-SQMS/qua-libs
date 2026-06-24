@@ -5,6 +5,8 @@ Used by:
   - calibrations/1Q_calibrations/02f_resonator_bringup_graph.py
   - calibrations/1Q_calibrations/03d_qubit_bringup_graph.py
   - calibrations/1Q_calibrations/92_calibration_graph_bringup_fixed_frequency_transmon_adaptive.py
+  - calibrations/1Q_calibrations/93_ef_bringup_graph.py
+  - calibrations/1Q_calibrations/94_cavity_bringup_graph.py
   - calibrations/1Q_calibrations/05_x180_fine_calibration_graph.py  (helpers only)
 """
 
@@ -13,7 +15,7 @@ from typing import List
 
 from qualibrate import GraphParameters, QualibrationGraph, QualibrationLibrary, QualibrationNode
 
-from calibration_utils.error_codes import PowerRabiErrorCode
+from calibration_utils.error_codes import PowerRabiErrorCode, DisplacementVacuumErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +125,35 @@ def should_repeat_rabi_amplitude(node: QualibrationNode, target: str) -> bool:
     return False
 
 
+def should_repeat_displacement_vacuum(node: QualibrationNode, target: str) -> bool:
+    """Retry the displacement vacuum-population calibration while the adaptive
+    amplitude/duration escalation loop is still trying to reach target_n_sigma
+    coverage of the Gaussian fit.
+
+    Checks the error_code directly (not node.outcomes, since the node's own
+    update_state forces outcome to "failed" while escalating even though the
+    underlying fit converged fine) so escalation iterations are distinguished
+    from a genuine fit failure.
+    """
+    error_code = (
+        node.results.get("fit_results", {})
+        .get(target, {})
+        .get("error_code", int(DisplacementVacuumErrorCode.SUCCESS))
+    )
+    if error_code == int(DisplacementVacuumErrorCode.INSUFFICIENT_RANGE_COVERAGE):
+        logger.info(
+            f"{target}: Displacement vacuum calibration coverage insufficient "
+            f"({DisplacementVacuumErrorCode(error_code).name}); "
+            "retrying with escalated amplitude/duration."
+        )
+        return True
+    if error_code == int(DisplacementVacuumErrorCode.FIT_FAILED):
+        logger.warning(f"{target}: Displacement vacuum calibration fit failed; not retrying automatically.")
+        return False
+    logger.info(f"{target}: Displacement vacuum calibration succeeded with full coverage.")
+    return False
+
+
 def should_restart_qubit_calibration(node, target: str) -> bool:
     """Restart the full calibration subgraph if it failed.
 
@@ -227,27 +258,27 @@ def build_resonator_bringup(
             broad_res_spec = library.nodes["02d_broad_resonator_spectroscopy"].copy(
                 name="broad_resonator_spectroscopy",
                 multiplexed=p.multiplexed,
-                frequency_span_in_mhz=300.0,
+                frequency_span_in_mhz=100.0,
                 frequency_step_in_mhz=0.1,
                 num_shots=50,
                 peak_prominence=10.0,
-                peak_width=[1.0, 10.0],
+                peak_width=[1.0, 5.0],
                 peak_height=None,
                 peak_threshold=None,
                 blacklist_exclusion_radius_mhz=10.0,
-                readout_power_dbm=-20.0,
-                max_amp=0.1,
+                readout_power_dbm=0.0,
+                max_amp=0.4,
             )
             resonator_discovery.add_node(broad_res_spec)
 
             high_power_res_spec = library.nodes["02a_resonator_spectroscopy"].copy(
                 name="resonator_spectroscopy_high_power",
                 multiplexed=p.multiplexed,
-                frequency_span_in_mhz=10.0,
-                frequency_step_in_mhz=0.05,
+                frequency_span_in_mhz=5.0,
+                frequency_step_in_mhz=0.01,
                 num_shots=50,
-                readout_power_dbm=-20.0,
-                max_amp=0.1,
+                readout_power_dbm=0.0,
+                max_amp=0.4,
                 save_readout_amplitude=True,
             )
             resonator_discovery.add_node(high_power_res_spec)
@@ -264,16 +295,16 @@ def build_resonator_bringup(
         resonator_punch_out = library.nodes["02e_resonator_punch_out"].copy(
             name="resonator_punch_out",
             multiplexed=p.multiplexed,
-            frequency_span_in_mhz=80.0,
-            frequency_step_in_mhz=0.1,
-            min_power_dbm=-50,
-            max_power_dbm=-20,
-            num_power_points=2,
-            max_amp=0.1,
-            num_shots=100,
+            frequency_span_in_mhz=2.0,
+            frequency_step_in_mhz=0.01,
+            min_power_dbm=-20,
+            max_power_dbm=0,
+            num_power_points=10,
+            max_amp=0.4,
+            num_shots=200,
             frequency_shift_threshold_in_hz=0.1e6,
             use_adaptive_span=p.use_adaptive_span,
-            sweep_left_offset_mhz=20.0,
+            sweep_left_offset_mhz=1.0,
         )
         resonator_bringup.add_node(resonator_punch_out)
         resonator_bringup.loop(
@@ -286,12 +317,13 @@ def build_resonator_bringup(
         low_power_res_spec = library.nodes["02a_resonator_spectroscopy"].copy(
             name="resonator_spectroscopy_low_power",
             multiplexed=p.multiplexed,
-            frequency_span_in_mhz=10.0,
-            frequency_step_in_mhz=0.05,
+            frequency_span_in_mhz=5.0,
+            frequency_step_in_mhz=0.01,
             num_shots=100,
             readout_power_dbm=None,
-            max_amp=0.1,
+            max_amp=0.2,
             save_readout_amplitude=True,
+            run_circle_fit=True,
         )
         resonator_bringup.add_node(low_power_res_spec)
 
@@ -345,14 +377,14 @@ def build_qubit_calibration(
             frequency_step_in_mhz=1.0,
             num_power_points=10,
             num_shots=100,
-            min_power_dbm=-80,
-            max_power_dbm=-20,
+            min_power_dbm=-60,
+            max_power_dbm=10,
             operation="saturation",
             operation_len_in_ns=20_000,
             linewidth_threshold_hz=1e6,
             max_amplitude_opx=0.24,
             min_amplitude_opx=0.01,
-            power_buffer_db=-10.0,
+            power_buffer_db=-0.0,
             signal_source="I_rot",
             peak_persistence_lookahead=0,
             peak_persistence_freq_tolerance_hz=5e6,
@@ -630,12 +662,11 @@ def build_x180_fine_calibration(
                 min_amp_factor=0.001,
                 max_amp_factor=1.99,
                 amp_factor_step=0.005,
-                num_shots=50,
+                num_shots=100,
                 operation="x180",
                 operation_length_in_ns=None,
                 max_number_pulses_per_sweep=1,
                 update_x90=True,
-                octave_gain_step_db=p.x180_rabi_octave_gain_step_db,
                 use_adaptive=p.x180_rabi_use_adaptive,
             )
             ramsey_rabi.add_node(power_rabi)
@@ -651,9 +682,9 @@ def build_x180_fine_calibration(
                 name="ramsey",
                 multiplexed=p.multiplexed,
                 num_shots=100,
-                frequency_detuning_in_mhz=1.0,
+                frequency_detuning_in_mhz=0.1,
                 min_wait_time_in_ns=16,
-                max_wait_time_in_ns=10_000,
+                max_wait_time_in_ns=100_000,
                 wait_time_num_points=200,
                 log_or_linear_sweep="linear",
                 x180_operation="x180",
@@ -719,8 +750,8 @@ def build_ef_bringup(
           → ef_tentative_rabi   (amplitude-only convergence, no Octave gain changes)
           If NO_OSCILLATION: blacklist EF freq, restart ef_discovery.
         → ef_rabi_ramsey [loop: should_repeat_ef_calibration until EF detuning converges]:
-              ef_power_rabi [inner loop: amplitude only, max_ef_rabi_iterations]
-              → ef_ramsey
+              ef_ramsey
+              → ef_power_rabi [inner loop: amplitude only, max_ef_rabi_iterations]
         → ef_T1
         → gef_readout_frequency_optimization
         → gef_iq_blobs
@@ -781,7 +812,7 @@ def build_ef_bringup(
 
     # ── should_repeat_ef_calibration ─────────────────────────────────────────
     def should_repeat_ef_calibration(node: QualibrationNode, target: str) -> bool:
-        """Loop ef_power_rabi → ef_ramsey until |EF detuning| < ef_freq_threshold_hz."""
+        """Loop ef_ramsey → ef_power_rabi until |EF detuning| < ef_freq_threshold_hz."""
         if not _ef_loop_state["initialized"].get(target, False):
             _ef_loop_state["detuning_history"][target] = []
             _ef_loop_state["initialized"][target] = True
@@ -877,7 +908,20 @@ def build_ef_bringup(
             parameters=_EFRabiRamseySubgraphParameters(),
         ) as ef_rabi_ramsey:
 
-            # Amplitude-only convergence inner loop (no Octave gain changes).
+            # Ramsey runs first, refining the EF frequency using the amplitude
+            # already set by ef_tentative_rabi, before the power Rabi
+            # amplitude-only convergence inner loop (no Octave gain changes).
+            ef_ramsey = library.nodes["06b_ramsey_ef"].copy(
+                name="ef_ramsey",
+                num_shots=p.ef_ramsey_num_shots,
+                frequency_detuning_in_mhz=p.ef_ramsey_frequency_detuning_in_mhz,
+                min_wait_time_in_ns=p.ef_ramsey_min_wait_time_in_ns,
+                max_wait_time_in_ns=p.ef_ramsey_max_wait_time_in_ns,
+                wait_time_num_points=p.ef_ramsey_wait_time_num_points,
+                log_or_linear_sweep=p.ef_ramsey_log_or_linear_sweep,
+            )
+            ef_rabi_ramsey.add_node(ef_ramsey)
+
             ef_power_rabi = library.nodes["13_power_rabi_ef"].copy(
                 name="ef_power_rabi",
                 min_amp_factor=p.ef_rabi_min_amp_factor,
@@ -891,18 +935,7 @@ def build_ef_bringup(
                 on=should_repeat_rabi_amplitude,
                 max_iterations=p.ef_rabi_max_amplitude_iterations,
             )
-
-            ef_ramsey = library.nodes["06b_ramsey_ef"].copy(
-                name="ef_ramsey",
-                num_shots=p.ef_ramsey_num_shots,
-                frequency_detuning_in_mhz=p.ef_ramsey_frequency_detuning_in_mhz,
-                min_wait_time_in_ns=p.ef_ramsey_min_wait_time_in_ns,
-                max_wait_time_in_ns=p.ef_ramsey_max_wait_time_in_ns,
-                wait_time_num_points=p.ef_ramsey_wait_time_num_points,
-                log_or_linear_sweep=p.ef_ramsey_log_or_linear_sweep,
-            )
-            ef_rabi_ramsey.add_node(ef_ramsey)
-            ef_rabi_ramsey.connect(ef_power_rabi, ef_ramsey)
+            ef_rabi_ramsey.connect(ef_ramsey, ef_power_rabi)
 
         ef_bringup.add_node(ef_rabi_ramsey)
         ef_bringup.loop(
@@ -973,8 +1006,11 @@ def build_cavity_bringup(
         cavity_mode_name,
         cavity_spec_frequency_span_mhz, cavity_spec_frequency_step_mhz,
         cavity_spec_amplitude_factor, cavity_spec_num_shots,
+        cavity_spec_subtract_baseline,
         cavity_disp_amp_min, cavity_disp_amp_max, cavity_disp_amp_points,
-        cavity_disp_num_shots,
+        cavity_disp_num_shots, cavity_disp_subtract_baseline,
+        cavity_disp_use_adaptive, cavity_disp_target_n_sigma,
+        max_displacement_vacuum_iterations,
         cavity_t1_min_wait_ns, cavity_t1_max_wait_ns, cavity_t1_num_points,
         cavity_t1_num_shots,
         parity_min_delay_ns, parity_max_delay_ns, parity_delay_step_ns,
@@ -1000,6 +1036,7 @@ def build_cavity_bringup(
             qubit_probe_operation=p.cavity_spec_qubit_probe_operation,
             use_state_discrimination=p.cavity_spec_use_state_discrimination,
             min_dip_fraction=p.cavity_spec_min_dip_fraction,
+            subtract_baseline=p.cavity_spec_subtract_baseline,
         )
         cavity_bringup.add_node(cav_spec)
 
@@ -1014,8 +1051,16 @@ def build_cavity_bringup(
             cavity_reset_type=p.cavity_disp_cavity_reset_type,
             active_reset=p.cavity_disp_active_reset,
             use_state_discrimination=p.cavity_disp_use_state_discrimination,
+            subtract_baseline=p.cavity_disp_subtract_baseline,
+            use_adaptive=p.cavity_disp_use_adaptive,
+            target_n_sigma=p.cavity_disp_target_n_sigma,
         )
         cavity_bringup.add_node(displ)
+        cavity_bringup.loop(
+            displ,
+            on=should_repeat_displacement_vacuum,
+            max_iterations=p.max_displacement_vacuum_iterations,
+        )
 
         cav_t1 = library.nodes["23_cavity_coherent_T1"].copy(
             name="cavity_T1",

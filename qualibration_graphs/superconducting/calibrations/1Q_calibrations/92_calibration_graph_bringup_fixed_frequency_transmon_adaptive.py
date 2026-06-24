@@ -2,7 +2,10 @@
 """
 Fixed-Frequency Transmon Bring-Up Graph (Adaptive FSM)
 
-Full automated bring-up sequence for a fixed-frequency transmon qubit.
+Full automated GE (ground-excited) bring-up sequence for a fixed-frequency
+transmon qubit. EF-transition and cavity-mode bring-up live in their own
+dedicated graphs (93_ef_bringup_graph.py, 94_cavity_bringup_graph.py) and
+should be run after this graph.
 
   ┌─────────────────────────────────────────────────────────────────────────┐
   │  1.  mixer_calibration                                                  │
@@ -24,8 +27,6 @@ Full automated bring-up sequence for a fixed-frequency transmon qubit.
   │  6.  readout_frequency_optimization                                     │
   │  7.  readout_length_optimization                                        │
   │  8.  readout_power_optimization                                         │
-  │  9.  [ef_bringup] (if run_ef_calibration=True)                         │
-  │  10. [cavity_bringup] (if run_cavity_calibration=True)                  │
   └─────────────────────────────────────────────────────────────────────────┘
 
 Graph-level parameters control graph FLOW (iteration limits, convergence
@@ -45,8 +46,6 @@ from calibration_utils.bringup_graphs import (
     build_resonator_bringup,
     build_qubit_calibration,
     build_x180_fine_calibration,
-    build_ef_bringup,
-    build_cavity_bringup,
     should_restart_qubit_calibration,
 )
 
@@ -74,13 +73,6 @@ class TransmonBringUpParameters(GraphParameters):
     max_punch_out_iterations: int = 5
     max_spec_vs_power_iterations: int = 5
     max_qubit_calibration_iterations: int = 3
-    max_ef_discovery_iterations: int = 3
-    """Max retries of ef_spectroscopy + ef_tentative_rabi when no EF oscillation is found."""
-    max_ef_spec_iterations: int = 3
-    ef_max_iterations: int = 5
-    """Max iterations of the ef_power_rabi → ef_ramsey convergence loop."""
-    ef_rabi_max_amplitude_iterations: int = 5
-    """Max inner retries of ef_power_rabi to converge period count before EF Ramsey."""
     x180_max_iterations: int = 10
     x180_rabi_max_amplitude_iterations: int = 5
     """Max retries of power_rabi to converge the period count before running Ramsey."""
@@ -97,23 +89,11 @@ class TransmonBringUpParameters(GraphParameters):
     spec_vs_power_use_adaptive_span: bool = True
     """Enable adaptive frequency span and power expansion in qubit spectroscopy vs power."""
     x180_rabi_use_adaptive: bool = True
-    """Enable adaptive amplitude/gain/duration escalation in power_rabi."""
-    x180_rabi_octave_gain_step_db: float = 10.0
-    """Max Octave gain step (dB) per adaptive iteration when base amplitude is maxed."""
+    """Enable adaptive amplitude/duration escalation in power_rabi."""
 
     # ── Convergence thresholds ─────────────────────────────────────────────────
     x180_freq_threshold_hz: float = 50_000.0
     """Stop the power_rabi → ramsey loop when |GE detuning| < this value [Hz]."""
-    ef_freq_threshold_hz: float = 50_000.0
-    """Stop the ef_power_rabi → ef_ramsey loop when |EF detuning| < this value [Hz]."""
-
-    # ── Optional subgraphs (evaluated at graph scan time) ─────────────────────
-    run_ef_calibration: bool = False
-    """Set False before loading the graph to omit the EF bringup subgraph entirely."""
-    run_cavity_calibration: bool = False
-    """Set True before loading the graph to append the cavity mode bringup subgraph."""
-    cavity_mode_name: str = "alice"
-    """Which cavity mode to calibrate: 'alice' or 'bob'."""
 
 
 # ─── Graph construction ───────────────────────────────────────────────────────
@@ -153,9 +133,9 @@ with QualibrationGraph.build(
     # ── 5. T1 ─────────────────────────────────────────────────────────────────
     t1 = library.nodes["05_T1"].copy(
         name="T1",
-        num_shots=1000,
+        num_shots=200,
         min_wait_time_in_ns=16,
-        max_wait_time_in_ns=200_000,
+        max_wait_time_in_ns=500_000,
         wait_time_num_points=100,
         log_or_linear_sweep="linear",
     )
@@ -196,16 +176,6 @@ with QualibrationGraph.build(
     )
     graph.add_node(readout_power_opt)
 
-    # ── 9. EF-transition bringup (optional, default on) ───────────────────────
-    if graph.parameters.run_ef_calibration:
-        ef_bringup = build_ef_bringup(graph, library)
-        graph.add_node(ef_bringup)
-
-    # ── 10. Cavity mode bringup (optional, default off) ───────────────────────
-    if graph.parameters.run_cavity_calibration:
-        cavity_bringup = build_cavity_bringup(graph, library)
-        graph.add_node(cavity_bringup)
-
     # ── Execution order ────────────────────────────────────────────────────────
     graph.connect(mixer_calibration, resonator_bringup)
     graph.connect(resonator_bringup, qubit_calibration)
@@ -214,13 +184,6 @@ with QualibrationGraph.build(
     graph.connect(t1, readout_freq_opt)
     graph.connect(readout_freq_opt, readout_length_opt)
     graph.connect(readout_length_opt, readout_power_opt)
-
-    _last_node = readout_power_opt
-    if graph.parameters.run_ef_calibration:
-        graph.connect(_last_node, ef_bringup)
-        _last_node = ef_bringup
-    if graph.parameters.run_cavity_calibration:
-        graph.connect(_last_node, cavity_bringup)
 
 
 graph.run()
