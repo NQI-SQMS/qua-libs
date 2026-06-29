@@ -2,9 +2,7 @@ from dataclasses import field
 from typing import Any, Dict, List, Optional
 
 from quam.core import QuamBase, quam_dataclass
-from quam_builder.architecture.superconducting.qpu import FixedFrequencyQuam
-from quam_builder.architecture.superconducting.cavity.cavity import Cavity
-from quam_builder.architecture.superconducting.qubit_pair import CavityTransmonPair
+from quam_builder.architecture.superconducting.qpu import CavityQuam, FluxTunableQuam
 
 
 @quam_dataclass
@@ -50,21 +48,19 @@ class TemporaryCalibrationData(QuamBase):
 
 
 @quam_dataclass
-class Quam(FixedFrequencyQuam):
-    """QUAM for a fixed-frequency transmon coupled to SRF cavities on OPX+/Octave.
+class Quam(CavityQuam, FluxTunableQuam):
+    """QUAM for flux-tunable transmons (with tunable couplers) coupled to SRF cavities.
 
-    Extends FixedFrequencyQuam with:
-      - cavities: SRF storage cavities (Alice, Bob, ...)
-      - cavity_transmon_pairs: qubit–cavity coupling parameters (chi, displacement k)
-      - temp_calibration: per-qubit temporary state used by adaptive calibration nodes
+    Adds `temp_calibration`: per-qubit temporary state used by adaptive calibration nodes.
 
     The load() override fixes a QUAM serialisation quirk where Octave loopbacks
     (Tuple[Tuple[str,str],str]) are round-tripped through JSON as nested lists,
     which typeguard rejects on reload.
+
+    FluxTunableQuam.initialize_qpu already activates the TWPA(s) and sets qubit/coupler
+    flux points, so no override is needed here.
     """
 
-    cavities: Dict[str, Cavity] = field(default_factory=dict)
-    cavity_transmon_pairs: Dict[str, CavityTransmonPair] = field(default_factory=dict)
     temp_calibration: Dict[str, TemporaryCalibrationData] = None
 
     @classmethod
@@ -87,7 +83,7 @@ class Quam(FixedFrequencyQuam):
             serialiser = cls.get_serialiser()
             contents, _ = serialiser.load(filepath_or_dict)
 
-        # Fix loopbacks: JSON round-trip turns Tuple[str,str] → list[str].
+        # Fix loopbacks: JSON round-trip turns Tuple[str,str] -> list[str].
         # Convert back to tuple so typeguard validation passes.
         for oct_data in contents.get("octaves", {}).values():
             if isinstance(oct_data, dict):

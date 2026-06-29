@@ -366,6 +366,8 @@ def fit_raw_data(
     signal_source = getattr(p, "signal_source", "I_rot")
     if signal_source == "IQ_abs":
         raw_signal = ds.IQ_abs
+    elif signal_source == "phase":
+        raw_signal = ds.phase
     else:
         raw_signal = ds.I_rot
 
