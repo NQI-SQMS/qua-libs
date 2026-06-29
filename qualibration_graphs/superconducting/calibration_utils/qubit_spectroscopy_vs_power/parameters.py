@@ -112,6 +112,9 @@ class NodeSpecificParameters(RunnableParameters):
                  the IQ trajectory is poorly conditioned or the user wants a
                  rotation-free view. The qubit feature may appear as a peak or
                  dip depending on the device; the sign is resolved automatically.
+      "phase"  – Unwrapped, slope-subtracted phase of the IQ vector (radians).
+                 Useful when the qubit-induced response is more visible as a
+                 phase shift than an amplitude change.
     """
 
 

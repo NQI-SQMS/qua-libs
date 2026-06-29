@@ -28,8 +28,8 @@ def plot_raw_data_with_fit(
       • 1D spectroscopy at selected power
 
     Args:
-        signal_source: "I_rot" (default) or "IQ_abs" — selects which signal
-                       is shown in the colour map and 1D slice.
+        signal_source: "I_rot" (default), "IQ_abs", or "phase" — selects which
+                       signal is shown in the colour map and 1D slice.
     """
 
     # fit_raw_data returns a new Dataset (I_rot, working_signal, selected_power,
@@ -46,7 +46,7 @@ def plot_raw_data_with_fit(
     for ax, qubit in grid_iter(grid):
         _plot_combined_cell(ax, ds, qubit, signal_source)
 
-    signal_label = "I_rot" if signal_source == "I_rot" else "IQ_abs"
+    signal_label = {"IQ_abs": "IQ_abs", "phase": "phase"}.get(signal_source, "I_rot")
     grid.fig.suptitle(f"Qubit spectroscopy vs power ({signal_label})")
     grid.fig.set_size_inches(15, 10)
     grid.fig.subplots_adjust(top=0.90, bottom=0.08, left=0.07, right=0.97, hspace=0.40)
@@ -102,7 +102,7 @@ def plot_qubit_spectro_vs_power(
 
     ds_q = ds_q.assign_coords(freq_GHz=ds_q.full_freq / u.GHz)
 
-    plot_var = "IQ_abs_mV" if signal_source == "IQ_abs" else "I_rot_mV"
+    plot_var = {"IQ_abs": "IQ_abs_mV", "phase": "phase"}.get(signal_source, "I_rot_mV")
     ds_q[plot_var].plot(
         ax=ax,
         x="freq_GHz",
@@ -171,6 +171,8 @@ def plot_qubit_spectro_at_selected_power(
 
     if signal_source == "IQ_abs":
         plot_var, ylabel = "IQ_abs_mV", "IQ_abs [mV]"
+    elif signal_source == "phase":
+        plot_var, ylabel = "phase", "Phase [rad]"
     else:
         plot_var, ylabel = "I_rot_mV", "I_rot [mV]"
 

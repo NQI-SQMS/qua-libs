@@ -1094,3 +1094,86 @@ def build_cavity_bringup(
         cavity_bringup.connect(cav_t1, parity)
 
     return cavity_bringup
+
+
+# ── TWPA bringup subgraph builder ───────────────────────────────────────────────
+
+class _TWPACalibrationSubgraphParameters(GraphParameters):
+    qubits: List[str] = ["q1"]
+
+
+def build_twpa_bringup(
+    graph: QualibrationGraph, library: QualibrationLibrary
+) -> QualibrationGraph:
+    """Build and return the ``twpa_bringup`` subgraph.
+
+    Sequence (all sequential, no retry loops)::
+
+        twpa_pump_power_sweep
+        → twpa_pump_frequency_sweep
+        → twpa_signal_saturation_power_sweep
+
+    Run before any readout-power-dependent calibration (resonator bringup,
+    GE bringup) -- TWPA gain must be set before optimizing readout power.
+
+    Reads the following attributes from ``graph.parameters``::
+
+        qubits, twpa_id, signal_power_dbm,
+        power_sweep_signal_frequency_span_mhz, power_sweep_signal_frequency_step_mhz,
+        power_sweep_pump_power_min_dbm, power_sweep_pump_power_max_dbm,
+        power_sweep_pump_power_step_db, power_sweep_num_shots,
+        freq_sweep_signal_frequency_span_mhz, freq_sweep_signal_frequency_step_mhz,
+        freq_sweep_pump_frequency_span_mhz, freq_sweep_pump_frequency_step_mhz,
+        freq_sweep_num_shots,
+        saturation_signal_power_min_dbm, saturation_signal_power_max_dbm,
+        saturation_num_power_points, saturation_num_shots
+    """
+    p = graph.parameters
+
+    with QualibrationGraph.build(
+        "twpa_bringup",
+        parameters=_TWPACalibrationSubgraphParameters(qubits=p.qubits),
+    ) as twpa_bringup:
+
+        power_sweep = library.nodes["01_twpa_pump_power_sweep"].copy(
+            name="twpa_pump_power_sweep",
+            qubits=p.qubits,
+            twpa_id=p.twpa_id,
+            signal_frequency_span_in_mhz=p.power_sweep_signal_frequency_span_mhz,
+            signal_frequency_step_in_mhz=p.power_sweep_signal_frequency_step_mhz,
+            signal_power_dbm=p.signal_power_dbm,
+            pump_power_min_dbm=p.power_sweep_pump_power_min_dbm,
+            pump_power_max_dbm=p.power_sweep_pump_power_max_dbm,
+            pump_power_step_db=p.power_sweep_pump_power_step_db,
+            num_shots=p.power_sweep_num_shots,
+        )
+        twpa_bringup.add_node(power_sweep)
+
+        freq_sweep = library.nodes["02_twpa_pump_frequency_sweep"].copy(
+            name="twpa_pump_frequency_sweep",
+            qubits=p.qubits,
+            twpa_id=p.twpa_id,
+            signal_frequency_span_in_mhz=p.freq_sweep_signal_frequency_span_mhz,
+            signal_frequency_step_in_mhz=p.freq_sweep_signal_frequency_step_mhz,
+            signal_power_dbm=p.signal_power_dbm,
+            pump_frequency_span_in_mhz=p.freq_sweep_pump_frequency_span_mhz,
+            pump_frequency_step_in_mhz=p.freq_sweep_pump_frequency_step_mhz,
+            num_shots=p.freq_sweep_num_shots,
+        )
+        twpa_bringup.add_node(freq_sweep)
+
+        saturation = library.nodes["03_twpa_signal_saturation_power_sweep"].copy(
+            name="twpa_signal_saturation_power_sweep",
+            qubits=p.qubits,
+            twpa_id=p.twpa_id,
+            signal_power_min_dbm=p.saturation_signal_power_min_dbm,
+            signal_power_max_dbm=p.saturation_signal_power_max_dbm,
+            num_power_points=p.saturation_num_power_points,
+            num_shots=p.saturation_num_shots,
+        )
+        twpa_bringup.add_node(saturation)
+
+        twpa_bringup.connect(power_sweep, freq_sweep)
+        twpa_bringup.connect(freq_sweep, saturation)
+
+    return twpa_bringup
