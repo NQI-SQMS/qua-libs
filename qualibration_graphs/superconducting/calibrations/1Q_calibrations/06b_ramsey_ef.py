@@ -236,16 +236,24 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def update_state(node: QualibrationNode[Parameters, Quam]):
     """Correct q.anharmonicity by the fitted EF freq_offset and store EF T2*."""
+    ef_x180_op = node.parameters.ef_x180_operation
+    use_selective_update = node.parameters.selective_state_update and ef_x180_op != "EF_x180"
     with node.record_state_updates():
         for q in node.namespace["qubits"]:
             if not node.results["fit_results"][q.name]["success"]:
                 continue
             freq_offset = float(node.results["fit_results"][q.name]["freq_offset"])
             decay = float(node.results["fit_results"][q.name]["decay"])
-            # The EF drive frequency = LO + IF_ge + anharmonicity.
-            # freq_offset > 0 means the actual EF freq is above the drive, so increase anharmonicity.
-            q.anharmonicity -= freq_offset
-            q.extras["T2ramsey_ef"] = decay
+            if use_selective_update:
+                # Store correction in pulse.detuning; do NOT touch anharmonicity / T2ramsey_ef
+                pulse = q.xy.operations.get(ef_x180_op)
+                if pulse is not None and hasattr(pulse, "detuning"):
+                    pulse.detuning -= freq_offset
+            else:
+                # The EF drive frequency = LO + IF_ge + anharmonicity.
+                # freq_offset > 0 means the actual EF freq is above the drive, so increase anharmonicity.
+                q.anharmonicity -= freq_offset
+                q.extras["T2ramsey_ef"] = decay
 
 
 # %% {Save_results}

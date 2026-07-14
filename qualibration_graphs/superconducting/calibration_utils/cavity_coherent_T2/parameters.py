@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+﻿from typing import Literal, Optional
 
 from qualibrate import NodeParameters
 from qualibrate.core.parameters import RunnableParameters
@@ -18,8 +18,8 @@ class NodeSpecificParameters(RunnableParameters):
 
     cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
     """How to reset the cavity before each displacement.
-    'thermal'         — wait thermalization_time_factor × T1 (passive decay).
-    'active_sideband' — drive f0g1 π-pulses to actively remove photons; requires a
+    'thermal'         â€” wait thermalization_time_factor × T1 (passive decay).
+    'active_sideband' â€” drive f0g1 π-pulses to actively remove photons; requires a
                         calibrated f0g1_pi operation on the sideband_drive of the
                         corresponding CavityTransmonPair."""
 
@@ -27,7 +27,7 @@ class NodeSpecificParameters(RunnableParameters):
     """Starting Fock level for active sideband cooling (only used when
     cavity_reset_type='active_sideband').  Set to 1 for thermal state cooling."""
 
-    f0g1_pulse_duration_ns: Optional[int] = None
+    sideband_pulse_duration_ns: Optional[int] = None
     """Override the f0g1 sideband pulse duration [ns] during active cooling.
     When None (default), the calibrated f0g1_pi pulse length is used.
     Must be a multiple of 4 ns."""
@@ -50,6 +50,8 @@ class NodeSpecificParameters(RunnableParameters):
 
     use_state_discrimination: bool = True
     """True -> measure qubit state (recommended). False -> measure raw I/Q."""
+    use_confusion_matrix_correction: bool = False
+    """Apply ge confusion matrix correction to averaged state probabilities."""
 
 
 class Parameters(

@@ -16,8 +16,6 @@ class NodeSpecificParameters(RunnableParameters):
     """Maximum readout amplitude, as a prefactor of the nominal readout amplitude. Default is 4.0."""
     num_amps: int = 5
     """Number of amplitudes to sweep (log-spaced). Default is 5."""
-    outliers_threshold: float = 0.98
-    """Outliers threshold used to discard noisy grid points when searching for the optimum. Default is 0.98."""
 
 
 class Parameters(

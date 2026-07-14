@@ -161,10 +161,20 @@ def fit_raw_data(
         fit_q = ds_fit.sel(qubit=q)
         a = float(fit_q.fit.sel(fit_vals="a").item())
         f = float(fit_q.fit.sel(fit_vals="f").item())
+        phi = float(fit_q.fit.sel(fit_vals="phi").item())
         q_chi2 = float(chi2.sel(qubit=q).item())
 
         if np.isfinite(f) and abs(f) > 0:
-            pi_cc = 1.0 / (2.0 * abs(f))
+            # First minimum of a·cos(2π·f·t + φ) + offset within the sweep window.
+            # The naive formula gives the first minimum from t=0, which may be before
+            # the sweep start (min_duration_ns). We shift by whole periods to find
+            # the first minimum that falls within the measured range.
+            period_cc = 1.0 / abs(f)
+            t_start_cc = float(ds.duration_cc.values[0])
+            pi_cc = ((np.pi - phi) % (2 * np.pi)) / (2 * np.pi * abs(f))
+            if pi_cc < t_start_cc:
+                n_shift = int(np.ceil((t_start_cc - pi_cc) / period_cc))
+                pi_cc += n_shift * period_cc
             pi_duration_ns = float(round(pi_cc) * 4)
             num_periods = abs(f) * sweep_range
         else:

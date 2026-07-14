@@ -1,4 +1,4 @@
-"""Analysis utilities for the T1 monitor node (node 31).
+"""Analysis utilities for the T1 monitor node (node 29).
 
 Reuses the T1 fitting logic from calibration_utils/T1/analysis.py.
 The monitor node calls fit_single_dataset once per iteration and accumulates

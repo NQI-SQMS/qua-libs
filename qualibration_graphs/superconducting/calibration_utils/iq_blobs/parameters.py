@@ -9,6 +9,8 @@ class NodeSpecificParameters(RunnableParameters):
     """Number of runs to perform. Default is 2000."""
     operation: Literal["readout", "readout_QND"] = "readout"
     """Type of operation to perform. Default is "readout"."""
+    ge_pi_pulse: str = "x180"
+    """Name of the ge pi pulse operation. Default is "x180"."""
 
 
 class Parameters(

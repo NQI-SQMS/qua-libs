@@ -1,5 +1,6 @@
 from typing import List
 
+import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 from matplotlib.axes import Axes
@@ -159,6 +160,119 @@ def _plot_individual_lda_boundaries(ax: Axes, qubit: dict, fit: xr.Dataset):
     ax.set_xlabel("I [mV]")
     ax.set_ylabel("Q [mV]")
     ax.set_title(qubit["qubit"])
+
+
+# ---------------------------------------------------------------------------
+# Two-cut sequential discriminator plots
+# ---------------------------------------------------------------------------
+
+def plot_two_cut(ds: xr.Dataset, qubits: List[AnyTransmon], fits: xr.Dataset) -> Figure:
+    """Two-panel figure per qubit showing the two-cut sequential discriminator.
+
+    Left panel  — rotated I histograms for |g⟩/|e⟩/|f⟩ with the g/(e+f) threshold.
+    Right panel — rotated Q histograms for |g⟩/|e⟩/|f⟩ with the e/f threshold.
+    The decision regions are annotated and shaded so the classification logic is clear.
+    """
+    n_qubits = len(qubits)
+    fig, axes = plt.subplots(n_qubits, 2, figsize=(12, 4 * n_qubits), squeeze=False)
+
+    for row, q in enumerate(qubits):
+        fq = fits.sel(qubit=q.name)
+        _plot_two_cut_single(axes[row, 0], axes[row, 1], fq, q.name)
+
+    fig.suptitle("Two-cut GEF discriminator (rotated frame)")
+    fig.tight_layout()
+    return fig
+
+
+def _plot_two_cut_single(ax_I: Axes, ax_Q: Axes, fq: xr.Dataset, qubit_name: str):
+    Ig_r = fq["_Ig_r"].values.astype(float)
+    Ie_r = fq["_Ie_r"].values.astype(float)
+    If_r = fq["_If_r"].values.astype(float)
+    Qg_r = fq["_Qg_r"].values.astype(float)
+    Qe_r = fq["_Qe_r"].values.astype(float)
+    Qf_r = fq["_Qf_r"].values.astype(float)
+
+    g_ef_thr = float(fq.gef_g_ef_threshold) * 1e3   # → mV
+    ge_f_thr = float(fq.gef_ge_f_threshold) * 1e3
+    f_below  = bool(int(fq.gef_f_is_below_ge_f))
+
+    colors = {"g": "tab:blue", "e": "tab:orange", "f": "tab:green"}
+    bins = 80
+
+    # ── Left: rotated I ──────────────────────────────────────────────────────
+    for label, data in [("g", Ig_r), ("e", Ie_r), ("f", If_r)]:
+        ax_I.hist(data * 1e3, bins=bins, alpha=0.5, label=f"|{label}⟩", color=colors[label])
+    ax_I.axvline(g_ef_thr, color="red", linestyle="--", linewidth=1.5, label="g/(e+f) threshold")
+
+    all_I = np.concatenate([Ig_r, Ie_r, If_r]) * 1e3
+    x_lo, x_hi = all_I.min(), all_I.max()
+    pad = 0.05 * (x_hi - x_lo)
+    ax_I.axvspan(x_lo - pad, g_ef_thr, alpha=0.07, color="tab:blue")   # g region
+    ax_I.axvspan(g_ef_thr, x_hi + pad, alpha=0.07, color="tab:red")    # e+f region
+    ax_I.set_xlabel("Rotated I [mV]")
+    ax_I.set_ylabel("Counts")
+    ax_I.set_title(f"{qubit_name} — Axis 1: g vs (e+f)")
+    ax_I.legend(fontsize=8)
+    ax_I.grid(linestyle="--", alpha=0.5)
+
+    # ── Right: rotated Q ─────────────────────────────────────────────────────
+    for label, data in [("g", Qg_r), ("e", Qe_r), ("f", Qf_r)]:
+        ax_Q.hist(data * 1e3, bins=bins, alpha=0.5, label=f"|{label}⟩", color=colors[label])
+    ax_Q.axvline(ge_f_thr, color="red", linestyle="--", linewidth=1.5, label="e/f threshold")
+
+    all_Q = np.concatenate([Qg_r, Qe_r, Qf_r]) * 1e3
+    q_lo, q_hi = all_Q.min(), all_Q.max()
+    pad_q = 0.05 * (q_hi - q_lo)
+    if f_below:
+        f_lo, f_hi = q_lo - pad_q, ge_f_thr
+        e_lo, e_hi = ge_f_thr, q_hi + pad_q
+        f_label_x = 0.15
+    else:
+        f_lo, f_hi = ge_f_thr, q_hi + pad_q
+        e_lo, e_hi = q_lo - pad_q, ge_f_thr
+        f_label_x = 0.85
+    ax_Q.axvspan(f_lo, f_hi, alpha=0.07, color="tab:green")   # f region
+    ax_Q.axvspan(e_lo, e_hi, alpha=0.07, color="tab:orange")  # e region
+
+    f_side = "below" if f_below else "above"
+    ax_Q.set_xlabel("Rotated Q [mV]")
+    ax_Q.set_ylabel("Counts")
+    ax_Q.set_title(f"{qubit_name} — Axis 2: e vs f  (f is {f_side} threshold)")
+    ax_Q.legend(fontsize=8)
+    ax_Q.grid(linestyle="--", alpha=0.5)
+
+    # Annotate confusion matrix diagonal on the axes
+    cm = fq.confusion_matrix_two_cut.values.astype(float)
+    fidelity = 1.0 - (np.sum(cm) - np.trace(cm)) / 2.0
+    ax_I.set_title(
+        f"{qubit_name} — Axis 1: g vs (e+f)  |  two-cut fidelity = {fidelity:.3f}",
+        fontsize=9,
+    )
+
+
+def plot_two_cut_confusion_matrix(ds: xr.Dataset, qubits: List[AnyTransmon], fits: xr.Dataset) -> Figure:
+    """Plot the two-cut confusion matrices alongside the LDA ones for comparison."""
+    grid = QubitGrid(ds, [q.grid_location for q in qubits])
+    for ax, qubit in grid_iter(grid):
+        fq = fits.sel(qubit=qubit["qubit"])
+        confusion = np.asarray(fq.confusion_matrix_two_cut.values, dtype=float)
+        im = ax.imshow(confusion, vmin=0, vmax=1)
+        ax.set_xticks([0, 1, 2], labels=["|g⟩", "|e⟩", "|f⟩"])
+        ax.set_yticks([0, 1, 2], labels=["|g⟩", "|e⟩", "|f⟩"])
+        ax.set_ylabel("Prepared")
+        ax.set_xlabel("Measured")
+        for prep in range(3):
+            for meas in range(3):
+                color = "k" if prep == meas else "w"
+                ax.text(meas, prep, f"{100 * confusion[prep, meas]:.1f}%",
+                        ha="center", va="center", color=color, fontsize=9)
+        fidelity = 1.0 - (np.sum(confusion) - np.trace(confusion)) / 2.0
+        ax.set_title(f"{qubit['qubit']}  (fid={fidelity:.3f})")
+    grid.fig.suptitle("GEF two-cut — confusion matrix")
+    grid.fig.set_size_inches(15, 9)
+    grid.fig.tight_layout()
+    return grid.fig
 
 
 # Keep old name for backward compatibility

@@ -1,4 +1,4 @@
-# %% {Imports}
+﻿# %% {Imports}
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
@@ -12,6 +12,7 @@ from qualang_tools.results import progress_counter
 from qualang_tools.units import unit
 
 from qualibrate import QualibrationNode
+from calibration_utils.shared import apply_confusion_matrix_correction, _get_cavity_mode
 from quam_config import Quam
 from calibration_utils.photon_number_resolved_spectroscopy import (
     Parameters,
@@ -27,7 +28,7 @@ from qualibration_libs.data import XarrayDataFetcher
 
 # %% {Description}
 description = """
-        PHOTON NUMBER RESOLVED SPECTROSCOPY — CHI MEASUREMENT (29)
+        PHOTON NUMBER RESOLVED SPECTROSCOPY â€” CHI MEASUREMENT (29)
 
 Displaces the selected cavity mode to a coherent state |α⟩ and sweeps the
 qubit ge spectroscopy frequency.  The resulting spectrum shows photon-number-
@@ -36,7 +37,7 @@ split peaks:
     f_n = f_q + chi*n   (n=0, 1, 2, ...)
 
 separated by |chi|.  The node auto-detects the number of peaks (1 → max_peaks)
-by fitting successive multi-Gaussian models until the reduced chi² drops below
+by fitting successive multi-Gaussian models until the reduced chiÂ² drops below
 the threshold.  chi = -(mean PNRS peak spacing) is saved to the machine state.
 
 Convention: chi [Hz] is the full per-photon qubit frequency shift (negative for
@@ -74,15 +75,6 @@ def custom_param(node: QualibrationNode[Parameters, Quam]):
 
 
 node.machine = Quam.load()
-
-
-def _get_cavity_mode(node):
-    mode_name = node.parameters.mode_name
-    for cav in node.machine.cavities.values():
-        mode = getattr(cav, mode_name, None)
-        if mode is not None:
-            return mode
-    raise KeyError(f"Cavity mode '{mode_name}' not found in machine.cavities")
 
 
 # %% {Create_QUA_program}
@@ -156,7 +148,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             sideband_drive=sideband_drive,
                             qubit_thermalization_time=qubit.thermalization_time,
                             fock_n=node.parameters.cavity_active_cooling_fock_n,
-                            f0g1_pulse_duration_ns=node.parameters.f0g1_pulse_duration_ns,
+                            sideband_pulse_duration_ns=node.parameters.sideband_pulse_duration_ns,
                         )
                         qubit.reset(
                             node.parameters.reset_type,
@@ -247,6 +239,8 @@ def load_data(node: QualibrationNode[Parameters, Quam]):
 # %% {Analyse_data}
 @node.run_action(skip_if=node.parameters.simulate)
 def analyse_data(node: QualibrationNode[Parameters, Quam]):
+    if node.parameters.use_state_discrimination and node.parameters.use_confusion_matrix_correction:
+        node.results["ds_raw"] = apply_confusion_matrix_correction(node.results["ds_raw"], node.namespace["qubits"])
     node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
     node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}

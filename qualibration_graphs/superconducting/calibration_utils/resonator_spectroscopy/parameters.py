@@ -31,7 +31,7 @@ class NodeSpecificParameters(RunnableParameters):
     chi2 > threshold → residuals dominate the dip depth, likely fitting noise.
     Default 3.0. Lower (e.g. 1.5) to reject marginal fits; raise if noisy data."""
     run_circle_fit: bool = False
-    """When True, run the Probst/Taeyoon circle-fit pipeline after the Lorentzian dip fit
+    """When True, run the Probst circle-fit pipeline after the Lorentzian dip fit
     to extract Q_loaded, Q_internal, Q_external, kappa_Hz, and phi0 from the IQ circle.
     Results are stored in QUAM (q.resonator.Q_loaded, etc.) at the end of the node.
     Geometry is controlled by circle_fit_geometry. Default False."""

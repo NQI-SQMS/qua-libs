@@ -11,6 +11,7 @@ from calibration_utils.iq_blobs_ef import (
     plot_confusion_matrices,
     plot_iq_blobs,
     plot_lda_boundaries,
+    plot_two_cut,
     process_raw_dataset,
 )
 from qm.qua import *
@@ -104,11 +105,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 node.machine.initialize_qpu(target=qubit)
             align()
 
-            # for i, qubit in multiplexed_qubits.items():
-            #     shift = qubit.resonator.GEF_frequency_shift if qubit.resonator.GEF_frequency_shift is not None else 0
-            #     qubit.resonator.update_frequency(
-            #         qubit.resonator.intermediate_frequency + shift
-            #     )  # resonator frequency shift for GEF
+            for i, qubit in multiplexed_qubits.items():
+                shift = qubit.resonator.GEF_frequency_shift if qubit.resonator.GEF_frequency_shift is not None else 0
+                qubit.resonator.update_frequency(
+                    qubit.resonator.intermediate_frequency + shift
+                )
 
             with for_(n, 0, n < n_runs, n + 1):
                 save(n, n_st)
@@ -134,7 +135,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 align()
                 # |e> state readout
                 for i, qubit in multiplexed_qubits.items():
-                    qubit.xy.play("x180")
+                    qubit.xy.play(node.parameters.ge_pi_pulse)
                     qubit.align()
                     qubit.resonator.measure(operation, qua_vars=(I_e[i], Q_e[i]))
                     # save data
@@ -149,9 +150,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 align()
                 # |f> state readout
                 for i, qubit in multiplexed_qubits.items():
-                    qubit.xy.play("x180")
+                    qubit.xy.play(node.parameters.ge_pi_pulse)
                     update_frequency(qubit.xy.name, qubit.xy.intermediate_frequency + qubit.anharmonicity)
-                    qubit.xy.play("EF_x180")
+                    qubit.xy.play(node.parameters.ef_pi_pulse)
                     update_frequency(qubit.xy.name, qubit.xy.intermediate_frequency)
                     qubit.align()
                     qubit.resonator.measure(operation, qua_vars=(I_f[i], Q_f[i]))
@@ -253,12 +254,14 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
     fig_iq = plot_iq_blobs(node.results["ds_raw"], node.namespace["qubits"], node.results["ds_fit"])
     fig_confusion = plot_confusion_matrices(node.results["ds_raw"], node.namespace["qubits"], node.results["ds_fit"])
     fig_lda = plot_lda_boundaries(node.results["ds_raw"], node.namespace["qubits"], node.results["ds_fit"])
+    fig_two_cut = plot_two_cut(node.results["ds_raw"], node.namespace["qubits"], node.results["ds_fit"])
     plt.show()
     # Store the generated figures
     node.results["figures"] = {
         "iq_blobs": fig_iq,
         "confusion_matrix": fig_confusion,
         "lda_boundaries": fig_lda,
+        "two_cut_histograms": fig_two_cut,
     }
 
 
@@ -294,6 +297,12 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             node.machine.qubits[q.name].gef_d_gf_V = fr["d_gf_V"]
             node.machine.qubits[q.name].gef_d_ef_V = fr["d_ef_V"]
             node.machine.qubits[q.name].gef_sigma_rms_V = fr["sigma_rms_V"]
+
+            # Two-cut sequential classifier (in volts, after ge rotation)
+            # g if I_rot ≤ g_ef_threshold; then e/f split on Q_rot by ge_f_threshold
+            node.machine.qubits[q.name].gef_g_ef_threshold = fr["gef_g_ef_threshold"]
+            node.machine.qubits[q.name].gef_ge_f_threshold = fr["gef_ge_f_threshold"]
+            node.machine.qubits[q.name].gef_f_is_below_ge_f = fr["gef_f_is_below_ge_f"]
 
 
 # %% {Save_results}

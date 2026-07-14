@@ -1,4 +1,4 @@
-"""Plotting for displacement calibration via PNRS (node 28).
+"""Plotting for displacement calibration via PNRS (node 26).
 
 Produces two subplots per qubit:
   1. 2D colormesh: displacement amplitude (x) vs qubit detuning (y, kHz) vs state (colour).

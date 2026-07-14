@@ -30,6 +30,8 @@ class NodeSpecificParameters(RunnableParameters):
     If also None, read from cavity_transmon_pairs in the machine state."""
     use_state_discrimination: bool = True
     """True → measure qubit state (0/1). False → measure raw I/Q."""
+    use_confusion_matrix_correction: bool = False
+    """Apply ge confusion matrix correction to averaged state probabilities."""
 
 
 class Parameters(

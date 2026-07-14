@@ -15,8 +15,8 @@ class NodeSpecificParameters(RunnableParameters):
     """Step size for the amplitude factor sweep."""
     mode_name: str = "alice"
     """Which cavity mode to calibrate: attribute name on the Cavity object (e.g. 'alice' or 'bob')."""
-    operation: str = "f0g1_pi"
-    """Name of the f0g1 operation whose amplitude will be calibrated."""
+    operation: str = "sideband_flat_top"
+    """Name of the sideband flat-top operation whose amplitude will be calibrated."""
     use_state_discrimination: bool = True
     """True → measure qubit state (recommended). False → measure raw I/Q."""
     cavity_thermalization_time_ns: Optional[int] = None

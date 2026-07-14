@@ -1,4 +1,4 @@
-"""Plotting utilities for the f0g1 time Rabi experiment."""
+﻿"""Plotting utilities for the f0g1 time Rabi experiment."""
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -24,7 +24,7 @@ def plot_raw_data_with_fit(
         _plot_single(ax, ds.loc[qubit], fits.sel(qubit=q_name), q_fit_params)
 
     grid.fig.suptitle(f"f0g1 Time Rabi — {mode_name}")
-    grid.fig.set_size_inches(10, 6)
+    grid.fig.set_size_inches(12, 7)
     grid.fig.tight_layout()
     return grid.fig
 
@@ -60,7 +60,12 @@ def _plot_single(ax, ds_q, fit, fit_params=None):
             ax.plot(x, fitted, "-", lw=1.5, color="C1", label="fit")
 
             if abs(f) > 0:
-                pi_cc = 1.0 / (2.0 * abs(f))
+                period_cc = 1.0 / abs(f)
+                t_start_cc = float(x_cc[0])
+                pi_cc = ((np.pi - phi) % (2 * np.pi)) / (2 * np.pi * abs(f))
+                if pi_cc < t_start_cc:
+                    n_shift = int(np.ceil((t_start_cc - pi_cc) / period_cc))
+                    pi_cc += n_shift * period_cc
                 pi_ns = round(pi_cc) * 4
                 ax.axvline(pi_ns, color="C2", ls="--", lw=1, label=f"π: {pi_ns:.0f} ns")
 

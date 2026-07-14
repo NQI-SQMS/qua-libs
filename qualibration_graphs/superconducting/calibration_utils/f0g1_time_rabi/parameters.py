@@ -20,11 +20,13 @@ class NodeSpecificParameters(RunnableParameters):
     duration_step_ns: int = 4
     """Step size for the duration sweep in ns. Must be a multiple of 4."""
 
-    operation: str = "f0g1_pi"
+    operation: str = "sideband_flat_top"
     """Operation to play on the f0g1 channel for the time Rabi sweep."""
 
     use_state_discrimination: bool = True
     """True -> measure qubit state (recommended). False -> measure raw I/Q."""
+    use_confusion_matrix_correction: bool = False
+    """Apply ge confusion matrix correction to averaged state probabilities."""
     cavity_thermalization_time_ns: Optional[int] = None
     """Override the cavity thermalization wait at the start of each shot [ns].
     When set, this value is used instead of cavity_mode.T1 × thermalization_time_factor.

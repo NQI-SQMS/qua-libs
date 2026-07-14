@@ -126,7 +126,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 # --- Qubit drive ---
                 for i, qubit in multiplexed_qubits.items():
                     # Play the x180 gate to put the qubits in the excited state
-                    qubit.xy.play("x180")
+                    qubit.xy.play(node.parameters.ge_pi_pulse)
                     # Align the elements to measure after playing the qubit pulses.
                     qubit.align()
 

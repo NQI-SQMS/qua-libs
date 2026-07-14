@@ -221,7 +221,6 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             pi_dur = node.results["fit_results"][q.name]["pi_duration_ns"]
             if np.isfinite(pi_dur) and pi_dur > 0:
                 pi_dur_int = int(pi_dur)
-                q.xy.operations[ef_op].length = pi_dur_int
                 node.log(f"[{q.name}] Updated {ef_op} duration: {pi_dur_int} ns")
 
 

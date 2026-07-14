@@ -50,8 +50,8 @@ def plot_coherent_T1(
     has_nbar = "nbar_data" in ds
 
     fig, axes = plt.subplots(
-        2, n_qubits,
-        figsize=(7 * n_qubits, 9),
+        1, n_qubits,
+        figsize=(7 * n_qubits, 4.5),
         squeeze=False,
     )
     fig.suptitle(
@@ -63,7 +63,6 @@ def plot_coherent_T1(
 
     for col, q_name in enumerate(qubit_names):
         ax_pe = axes[0][col]
-        ax_nb = axes[1][col]
 
         ds_q = ds.sel(qubit=q_name)
         t_ns = ds_q.idle_time.values.astype(float)
@@ -124,37 +123,6 @@ def plot_coherent_T1(
         ax_pe.set_title(q_name, fontsize=11)
         ax_pe.legend(fontsize=9)
         ax_pe.grid(True, alpha=0.3)
-
-        # --- Bottom panel: |α(t)|² = nbar(t) ---
-        if has_nbar and res is not None and res.get("success"):
-            nbar_data = ds_q["nbar_data"].values.astype(float)
-            nbar_fit_curve = res["nbar0"] * np.exp(-t_fine / res["T1_ns"])
-            T1_us = res["T1_ns"] * 1e-3
-
-            ax_nb.plot(t_ns * 1e-3, nbar_data, "o", ms=4, color="steelblue", label="|α(t)|² data")
-            ax_nb.plot(
-                t_fine * 1e-3,
-                nbar_fit_curve,
-                "-",
-                lw=2,
-                color="tomato",
-                label=f"|α₀|²·exp(−t/T₁)\nT₁ = {T1_us:.1f} µs\n|α₀|² = {res['nbar0']:.2f}",
-            )
-            ax_nb.axvline(T1_us, color="gray", linestyle="--", lw=1, alpha=0.6,
-                          label=f"T₁ = {T1_us:.1f} µs")
-            ax_nb.set_ylim(bottom=0)
-        elif res is not None and not res.get("success"):
-            ax_nb.text(0.5, 0.5, "Fit failed", transform=ax_nb.transAxes,
-                       ha="center", va="center", fontsize=12, color="red")
-        else:
-            ax_nb.text(0.5, 0.5, "No nbar data", transform=ax_nb.transAxes,
-                       ha="center", va="center", fontsize=11, color="gray")
-
-        ax_nb.set_xlabel("Wait time (µs)", fontsize=11)
-        ax_nb.set_ylabel("|α(t)|²  (photons)", fontsize=11)
-        ax_nb.set_title(f"{q_name} — photon number decay", fontsize=11)
-        ax_nb.legend(fontsize=9)
-        ax_nb.grid(True, alpha=0.3)
 
     fig.tight_layout()
     return fig

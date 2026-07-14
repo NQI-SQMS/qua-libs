@@ -1,7 +1,7 @@
 """
 Resonator circle-fit pipeline for the 02a calibration node.
 
-Implements the same multi-step algorithm as Taeyoon's CircleFit/circuit.py
+Implements the multi-step algorithm from CircleFit/circuit.py
 (Probst et al., Rev. Sci. Instrum. 86, 024703 (2015), arXiv:1410.3365)
 but operates directly on numpy arrays — no DataModule dependency.
 
@@ -64,7 +64,7 @@ def run_circle_fit(
     weight_width: float = 1.0,
     fit_range: float = 0.10,
 ) -> CircleFitParameters:
-    """Run the Taeyoon/Probst circle-fit pipeline on raw IQ data.
+    """Run the Probst circle-fit pipeline on raw IQ data.
 
     Parameters
     ----------

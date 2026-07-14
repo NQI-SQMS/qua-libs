@@ -1,4 +1,4 @@
-"""Plotting routines for the parity-time calibration (node 30)."""
+"""Plotting routines for the parity-time calibration (node 28)."""
 from __future__ import annotations
 
 from typing import Dict

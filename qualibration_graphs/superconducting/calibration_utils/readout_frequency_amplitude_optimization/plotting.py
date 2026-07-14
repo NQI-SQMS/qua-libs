@@ -52,7 +52,7 @@ def plot_individual_fidelity_map(ax: Axes, ds_fit: xr.Dataset, qubit: dict[str, 
         mapping to the qubit to plot.
     """
     ds_q = ds_fit.sel(qubit=qubit["qubit"])
-    fidelity = ds_q.fit_data.sel(fit_vals="meas_fidelity").transpose("amp_prefactor", "detuning")
+    fidelity = ds_q.fidelity_ge.transpose("amp_prefactor", "detuning")
     freq_ghz = 1e-9 * ds_q.full_freq
     amp_mv = 1e3 * ds_q.readout_amplitude
 

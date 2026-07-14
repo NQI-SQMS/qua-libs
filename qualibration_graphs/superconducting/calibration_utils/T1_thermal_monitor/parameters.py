@@ -50,6 +50,8 @@ class NodeSpecificParameters(RunnableParameters):
     """Step size for the RPM amplitude scale sweep."""
     ef_operation: str = "EF_x180"
     """Name of the EF π-pulse operation on qubit.xy."""
+    use_confusion_matrix_correction: bool = False
+    """Apply ge confusion matrix correction to averaged state probabilities."""
 
 
 class Parameters(

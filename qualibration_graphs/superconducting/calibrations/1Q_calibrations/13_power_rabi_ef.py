@@ -92,15 +92,14 @@ def create_qua_program(node: QualibrationNode[EfParameters, Quam]):
         "qubit": xr.DataArray(qubits.get_names()),
         "amp_prefactor": xr.DataArray(amps, attrs={"long_name": "pulse amplitude prefactor"}),
     }
-    for qubit in qubits:
-        # Check if the qubit has the required operations
-        if hasattr(qubit.xy.operations, "EF_x180"):
-            continue
-        else:
-            x180 = qubit.xy.operations["x180"]
-            qubit.xy.operations["EF_x180"] = (
-                dataclasses.replace(x180, alpha=0.0) if hasattr(x180, "alpha") else dataclasses.replace(x180)
-            )
+    operation = node.parameters.operation
+    if operation == "EF_x180":
+        for qubit in qubits:
+            if not hasattr(qubit.xy.operations, "EF_x180"):
+                x180 = qubit.xy.operations["x180"]
+                qubit.xy.operations["EF_x180"] = (
+                    dataclasses.replace(x180, alpha=0.0) if hasattr(x180, "alpha") else dataclasses.replace(x180)
+                )
 
     with program() as node.namespace["qua_program"]:
         I, I_st, Q, Q_st, n, n_st = node.machine.declare_qua_variables()
@@ -129,16 +128,19 @@ def create_qua_program(node: QualibrationNode[EfParameters, Quam]):
                         qubit.xy.wait(2 * qubit.thermalization_time // 4)
                     align()
                     for i, qubit in multiplexed_qubits.items():
-                        # Set the XY channel to the |g> -> |e> transition (GE) intermediate frequency
-                        qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
+                        if operation == "EF_x180":
+                            # Set the XY channel to the |g> -> |e> transition (GE) intermediate frequency
+                            qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
                         # Apply previously calibrated pi pulse to populate |e>
                         qubit.xy.play("x180")
-                        # Shift drive to the |e> -> |f> (EF) transition (anharmonicity is stored with its physical sign)
-                        qubit.xy.update_frequency(qubit.xy.intermediate_frequency + qubit.anharmonicity)
+                        if operation == "EF_x180":
+                            # Shift drive to the |e> -> |f> (EF) transition (anharmonicity is stored with its physical sign)
+                            qubit.xy.update_frequency(qubit.xy.intermediate_frequency + qubit.anharmonicity)
                         # Apply EF pi pulse with swept amplitude scaling factor 'a'
-                        qubit.xy.play("EF_x180", amplitude_scale=a)
-                        # Reset to ge frequency and apply ge pi pulse for improved readout fidelity
-                        qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
+                        qubit.xy.play(operation, amplitude_scale=a)
+                        if operation == "EF_x180":
+                            # Reset to ge frequency and apply ge pi pulse for improved readout fidelity
+                            qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
                         qubit.xy.play("x180")
                     align()
 
@@ -259,8 +261,13 @@ def update_state(node: QualibrationNode[EfParameters, Quam]):
             if node.outcomes[q.name] == "failed":
                 continue
             else:
-                operation = q.xy.operations["EF_x180"]
-                operation.amplitude = node.results["fit_results"][q.name]["opt_amp"]
+                op = q.xy.operations[node.parameters.operation]
+                op.amplitude = node.results["fit_results"][q.name]["opt_amp"]
+                if node.parameters.operation == "EF_x180" and "selective_EF_x180" in q.xy.operations:
+                    try:
+                        q.xy.operations["selective_EF_x180"].amplitude = op.amplitude / 100
+                    except (ValueError, KeyError, AttributeError):
+                        pass
 
 
 # %% {Save_results}

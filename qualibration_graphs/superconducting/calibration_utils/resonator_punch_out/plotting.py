@@ -82,6 +82,17 @@ def _plot_bifurcation_dense(ds: xr.Dataset, qubits: List[AnyTransmon], fits: xr.
         ax_phase.set_ylabel("Readout power [dBm]")
         ax_phase.set_title(f"{qubit.name}: phase")
 
+        f_center_ghz = qubit.resonator.RF_frequency / 1e9
+        for ax in [ax_mag, ax_phase]:
+            secax = ax.secondary_xaxis(
+                "top",
+                functions=(
+                    lambda x, fc=f_center_ghz: x / 1e3 + fc,
+                    lambda x, fc=f_center_ghz: (x - fc) * 1e3,
+                ),
+            )
+            secax.set_xlabel("RF frequency [GHz]")
+
         min_freq_mhz = fit_q.min_freq.values / u.MHz
         min_phase = fit_q.min_phase.values
         safe_power = float(fit_q.safe_power)

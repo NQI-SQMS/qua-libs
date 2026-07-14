@@ -179,6 +179,11 @@ class DisplacementVacuumErrorCode(IntEnum):
     """Fit converged but the swept amplitude_scale range did not reach
     target_n_sigma * sigma_fit -- the Gaussian tail was not adequately sampled."""
 
+    SPAN_TOO_LARGE = 3
+    """Fit failed because the swept amplitude range is much larger than sigma:
+    fewer than min_points_on_peak data points land on the Gaussian peak, so
+    curve_fit cannot converge. The sweep must be shrunk before retrying."""
+
 
 class DisplacementVacuumCorrectiveAction(IntEnum):
     """Corrective actions for the displacement vacuum-population calibration."""
@@ -196,6 +201,11 @@ class DisplacementVacuumCorrectiveAction(IntEnum):
     INCREASE_DURATION = 20
     """Increasing the displacement pulse duration once amplitude headroom
     (AMP_SCALE_LIMIT / DAC ceiling) is exhausted."""
+
+    SHRINK_AMPLITUDE_SPAN = 30
+    """Reducing amp_max (and amp_min symmetrically) because the current sweep
+    range is so large that fewer than min_points_on_peak points landed on the
+    Gaussian peak, preventing the fit from converging."""
 
     RESET_ADAPTIVE_PARAMS = 99
     """Resetting all adaptive parameters after successful calibration."""

@@ -1,4 +1,4 @@
-"""Plotting utilities for the T1 + T2* + T2 echo + thermal population monitor (node 34)."""
+"""Plotting utilities for the T1 + T2* + T2 echo + thermal population monitor (node 32)."""
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure

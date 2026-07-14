@@ -50,6 +50,10 @@ class FitParameters:
     error_code: int
     """DisplacementVacuumErrorCode value."""
     success: bool
+    sigma_hint: float = float("nan")
+    """Crude sigma estimate (in amplitude_scale units) used when error_code is
+    SPAN_TOO_LARGE to guide the adaptive span-shrink. Derived from the outermost
+    data point that still has signal above the noise floor."""
 
 
 def log_fitted_results(fit_results: Dict, log_callable=None):
@@ -265,14 +269,35 @@ def fit_raw_data(
             fit_ok = False
 
         if not fit_ok:
-            fit_results[str(q)] = FitParameters(
-                sigma=float("nan"),
-                amplitude=float("nan"),
-                offset=float("nan"),
-                coverage_ratio=float("nan"),
-                error_code=int(DisplacementVacuumErrorCode.FIT_FAILED),
-                success=False,
-            )
+            # Distinguish span-too-large from a genuinely bad fit:
+            # if fewer than 4 points are above the noise floor the Gaussian peak
+            # is under-sampled and the sweep must be shrunk, not the fit retried.
+            noise_floor = float(np.percentile(np.abs(signal), 20))
+            peak_signal = float(np.abs(signal - noise_floor).max())
+            above_noise = np.abs(signal - noise_floor) > 0.1 * peak_signal
+            n_above = int(above_noise.sum())
+            if n_above < 4 and peak_signal > 1e-6:
+                # Crude sigma estimate: outermost amplitude with signal above noise.
+                above_amps = np.abs(a_arr)[above_noise]
+                sigma_hint = float(above_amps.max()) if len(above_amps) > 0 else float("nan")
+                fit_results[str(q)] = FitParameters(
+                    sigma=float("nan"),
+                    amplitude=float("nan"),
+                    offset=float("nan"),
+                    coverage_ratio=float("nan"),
+                    error_code=int(DisplacementVacuumErrorCode.SPAN_TOO_LARGE),
+                    success=False,
+                    sigma_hint=sigma_hint,
+                )
+            else:
+                fit_results[str(q)] = FitParameters(
+                    sigma=float("nan"),
+                    amplitude=float("nan"),
+                    offset=float("nan"),
+                    coverage_ratio=float("nan"),
+                    error_code=int(DisplacementVacuumErrorCode.FIT_FAILED),
+                    success=False,
+                )
             continue
 
         coverage_ratio = current_amp_max_scale / sigma_fit if sigma_fit > 0 else 0.0

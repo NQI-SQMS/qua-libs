@@ -3,12 +3,12 @@ from dataclasses import dataclass
 from typing import Tuple, Dict
 import numpy as np
 import xarray as xr
-from sklearn.mixture import GaussianMixture
 
 from qualibrate import QualibrationNode
 from qualibration_libs.data import convert_IQ_to_V
 from calibration_utils.iq_blobs import fit_raw_data as fit_iq_blobs
 from calibration_utils.iq_blobs.analysis import FitParameters as FitParametersIQblobs
+from scipy.optimize import minimize_scalar
 
 
 @dataclass
@@ -20,16 +20,6 @@ class FitParameters(FitParametersIQblobs):
 
 
 def log_fitted_results(fit_results: Dict, log_callable=None):
-    """
-    Logs the node-specific fitted results for all qubits from the fit results.
-
-    Parameters:
-    -----------
-    fit_results : dict
-        Dictionary containing the fitted results for all qubits.
-    log_callable : callable, optional
-        Logger for logging the fitted results. If None, a default logger is used.
-    """
     if log_callable is None:
         log_callable = logging.getLogger(__name__).info
     for q in fit_results.keys():
@@ -45,21 +35,17 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
 
 
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
-    # Skip if the data has already been processed
     if ~np.all([var in ds.data_vars for var in ["Ig", "Qg", "Ie", "Qe"]]):
         return ds
     ds = convert_IQ_to_V(ds, node.namespace["qubits"], IQ_list=["Ig", "Qg", "Ie", "Qe"])
-    # Add the absolute readout amplitude to the dataset
     readout_amplitudes = np.array(
         [ds.amp_prefactor * q.resonator.operations["readout"].amplitude for q in node.namespace["qubits"]]
     )
     ds = ds.assign_coords(readout_amplitude=(["qubit", "amp_prefactor"], readout_amplitudes))
     ds.readout_amplitude.attrs = {"long_name": "readout amplitude", "units": "V"}
-    # Add the absolute readout frequency to the dataset
     full_freq = np.array([ds.detuning + q.resonator.RF_frequency for q in node.namespace["qubits"]])
     ds = ds.assign_coords(full_freq=(["qubit", "detuning"], full_freq))
     ds.full_freq.attrs = {"long_name": "RF frequency", "units": "Hz"}
-    # Rearrange the data to combine I_g and I_e into I, and Q_g and Q_e into Q
     ds_rearranged = xr.Dataset()
     ds_rearranged["I"] = xr.concat([ds.Ig, ds.Ie], dim="state")
     ds_rearranged["I"] = ds_rearranged["I"].assign_coords(state=[0, 1])
@@ -75,77 +61,31 @@ def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
     return ds
 
 
-def _apply_fit_gmm(I, Q):
-    """Fast single-shot GMM-based fidelity proxy, used to locate the optimal grid point."""
-    I_mean = np.mean(I, axis=1)
-    Q_mean = np.mean(Q, axis=1)
-    means_init = [[I_mean[0], Q_mean[0]], [I_mean[1], Q_mean[1]]]
-    precisions_init = [1 / ((np.mean(np.var(I, axis=1)) + np.mean(np.var(Q, axis=1))) / 2)] * 2
-    clf = GaussianMixture(
-        n_components=2,
-        covariance_type="spherical",
-        means_init=means_init,
-        precisions_init=precisions_init,
-        tol=1e-5,
-        reg_covar=1e-12,
-    )
-    X = np.array([np.array(I).flatten(), np.array(Q).flatten()]).T
-    clf.fit(X)
-    meas_fidelity = (
-        np.sum(clf.predict(np.array([I[0], Q[0]]).T) == 0) / len(I[0])
-        + np.sum(clf.predict(np.array([I[1], Q[1]]).T) == 1) / len(I[1])
-    ) / 2
-    loglikelihood = clf.score_samples(X)
-    max_ll = np.max(loglikelihood)
-    outliers = np.sum(loglikelihood > np.log(0.01) + max_ll) / len(X)
-    return np.array([meas_fidelity, outliers])
-
-
 def fit_raw_data(ds: xr.Dataset, node: QualibrationNode) -> Tuple[xr.Dataset, xr.Dataset, dict[str, FitParameters]]:
-    """
-    Jointly optimize the readout frequency and amplitude for each qubit in the dataset.
-
-    Parameters:
-    -----------
-    ds : xr.Dataset
-        Dataset containing the raw data.
-    node : QualibrationNode
-        The node, used to access qubits and parameters.
-
-    Returns:
-    --------
-    Tuple[xr.Dataset, xr.Dataset, dict[str, FitParameters]]
-        The dataset with the fit metric added, the IQ blob dataset evaluated at the optimum, and the per-qubit
-        fit results.
-    """
     ds_fit = ds
 
-    # Fast fidelity proxy over the full (detuning, amp_prefactor) grid, used only to locate the optimum.
-    fit_data = xr.apply_ufunc(
-        _apply_fit_gmm,
+    # True 2-state fidelity at every (detuning, amp_prefactor) grid point
+    def _true_fidelity(I, Q):
+        """I/Q shape: (2, n_runs). Returns scalar fidelity."""
+        return _ge_fidelity(I[0], Q[0], I[1], Q[1])
+
+    fidelity = xr.apply_ufunc(
+        _true_fidelity,
         ds_fit.I,
         ds_fit.Q,
         input_core_dims=[["state", "n_runs"], ["state", "n_runs"]],
-        output_core_dims=[["fit_vals"]],
+        output_core_dims=[[]],
         vectorize=True,
     )
-    fit_data = fit_data.assign_coords(fit_vals=["meas_fidelity", "outliers"])
-    ds_fit = xr.merge([ds, fit_data.rename("fit_data")])
+    fidelity.attrs = {"long_name": "g/e discrimination fidelity"}
+    ds_fit = xr.merge([ds, fidelity.rename("fidelity_ge")])
 
-    fit_data, fit_results, ds_iq_blobs = _extract_relevant_fit_parameters(ds_fit, node)
-
-    return fit_data, ds_iq_blobs, fit_results
+    ds_fit, ds_iq_blobs, fit_results = _extract_relevant_fit_parameters(ds_fit, node)
+    return ds_fit, ds_iq_blobs, fit_results
 
 
 def _extract_relevant_fit_parameters(ds_fit: xr.Dataset, node: QualibrationNode):
-    """Locate the optimal (detuning, amp_prefactor) point per qubit and refine the readout statistics there."""
-
-    meas_fidelity = ds_fit.fit_data.sel(fit_vals="meas_fidelity")
-    outliers = ds_fit.fit_data.sel(fit_vals="outliers")
-    valid_fidelity = meas_fidelity.where(outliers >= node.parameters.outliers_threshold)
-
-    # Stack the 2D (detuning, amp_prefactor) grid into a single dimension to find the joint argmax per qubit.
-    stacked = valid_fidelity.stack(point=("detuning", "amp_prefactor"))
+    stacked = ds_fit.fidelity_ge.stack(point=("detuning", "amp_prefactor"))
     best_idx = stacked.fillna(-np.inf).argmax(dim="point")
     best_detuning = stacked["detuning"][best_idx]
     best_amp_prefactor = stacked["amp_prefactor"][best_idx]
@@ -155,7 +95,6 @@ def _extract_relevant_fit_parameters(ds_fit: xr.Dataset, node: QualibrationNode)
         optimal_amp_prefactor=("qubit", best_amp_prefactor.values),
     )
 
-    # Select, for each qubit, the data at its own optimal (detuning, amp_prefactor) point.
     best_data = ds_fit.sel(
         detuning=ds_fit["optimal_detuning"],
         amp_prefactor=ds_fit["optimal_amp_prefactor"],
@@ -175,4 +114,35 @@ def _extract_relevant_fit_parameters(ds_fit: xr.Dataset, node: QualibrationNode)
         params_dict["optimal_amplitude"] = float(best_data["readout_amplitude"].sel(qubit=q))
         params_dict["optimal_frequency"] = float(best_data["full_freq"].sel(qubit=q))
         fit_results[q] = FitParameters(**params_dict)
-    return ds_fit, fit_results, ds_iq_blobs
+    return ds_fit, ds_iq_blobs, fit_results
+
+
+# ── True fidelity helpers (two-cut algorithm) ────────────────────────────────
+
+def _rotate_iq(I, Q, angle):
+    C, S = np.cos(angle), np.sin(angle)
+    return I * C - Q * S, I * S + Q * C
+
+
+def _ge_rotation_angle(Ig, Qg, Ie, Qe):
+    angle = np.arctan2(np.mean(Qe) - np.mean(Qg), np.mean(Ig) - np.mean(Ie))
+    C, S = np.cos(angle), np.sin(angle)
+    if np.mean((Ig - Ie) * C - (Qg - Qe) * S) > 0:
+        angle += np.pi
+    return float(angle)
+
+
+def _ge_fidelity(Ig, Qg, Ie, Qe) -> float:
+    """True 2-state discrimination fidelity via optimal threshold search."""
+    angle = _ge_rotation_angle(Ig, Qg, Ie, Qe)
+    Ig_rot, _ = _rotate_iq(Ig, Qg, angle)
+    Ie_rot, _ = _rotate_iq(Ie, Qe, angle)
+    result = minimize_scalar(
+        lambda t: np.sum(Ig_rot > t) + np.sum(Ie_rot < t),
+        bounds=(min(Ig_rot.min(), Ie_rot.min()), max(Ig_rot.max(), Ie_rot.max())),
+        method="bounded",
+    )
+    t = result.x
+    gg = np.sum(Ig_rot < t) / len(Ig_rot)
+    ee = np.sum(Ie_rot >= t) / len(Ie_rot)
+    return float((gg + ee) / 2)

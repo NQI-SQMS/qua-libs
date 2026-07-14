@@ -6,7 +6,7 @@ import numpy as np
 import xarray as xr
 from qualibrate import QualibrationNode
 from qualibration_libs.data import convert_IQ_to_V
-from scipy.optimize import curve_fit
+from scipy.optimize import curve_fit, minimize_scalar
 
 
 @dataclass
@@ -39,6 +39,11 @@ class FitParameters:
     d_ge_over_sigma: Optional[float] = None
     d_gf_over_sigma: Optional[float] = None
     d_ef_over_sigma: Optional[float] = None
+    # Two-cut sequential classifier (perpendicular axes after ge rotation)
+    gef_g_ef_threshold: float = 0.0
+    gef_ge_f_threshold: float = 0.0
+    gef_f_is_below_ge_f: bool = True
+    confusion_matrix_two_cut: List[List[float]] = field(default_factory=lambda: [[0.0] * 3] * 3)
     success: bool = True
 
 
@@ -64,6 +69,18 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
         log_callable(
             f"  LDA fidelity: P(g|g)={cm[0,0]:.3f}, P(e|e)={cm[1,1]:.3f}, P(f|f)={cm[2,2]:.3f}"
         )
+        # Log two-cut fidelity
+        cm_t = np.array(fp.confusion_matrix_two_cut)
+        thr_info = (
+            f"g_ef_thr={fp.gef_g_ef_threshold * 1e3:.2f} mV, "
+            f"ge_f_thr={fp.gef_ge_f_threshold * 1e3:.2f} mV "
+            f"({'f below' if fp.gef_f_is_below_ge_f else 'f above'})"
+        )
+        two_cut_fid = 1.0 - (np.sum(cm_t) - np.trace(cm_t)) / 2.0
+        log_callable(
+            f"  Two-cut fidelity: {two_cut_fid:.3f} | "
+            f"P(g|g)={cm_t[0,0]:.3f}, P(e|e)={cm_t[1,1]:.3f}, P(f|f)={cm_t[2,2]:.3f} | {thr_info}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -86,6 +103,26 @@ def _confusion_matrix_3state(true_labels, pred_labels):
         for j in range(3):
             M[i, j] = np.mean(pred_labels[idx] == j)
     return M
+
+
+def _get_threshold_optimized(state1: np.ndarray, state2: np.ndarray) -> Tuple[float, float]:
+    """Find threshold T maximising 1 - P(state1 > T) - P(state2 ≤ T).
+
+    Pass state1 as the distribution expected to lie BELOW the threshold so that
+    the natural decision rule is: value ≤ T → state1, value > T → state2.
+
+    Returns (threshold, fidelity).
+    """
+    s1 = np.asarray(state1, dtype=float)
+    s2 = np.asarray(state2, dtype=float)
+    lo = min(s1.min(), s2.min())
+    hi = max(s1.max(), s2.max())
+
+    def neg_fidelity(T):
+        return -(1.0 - np.sum(s1 > T) / len(s1) - np.sum(s2 <= T) / len(s2))
+
+    result = minimize_scalar(neg_fidelity, bounds=(lo, hi), method="bounded")
+    return float(result.x), float(-result.fun)
 
 
 def _compute_classifiers(Ig, Qg, Ie, Qe, If, Qf):
@@ -182,6 +219,46 @@ def _compute_classifiers(Ig, Qg, Ie, Qe, If, Qf):
     d_gf = float(np.linalg.norm(mu_f - mu_g))
     d_ef = float(np.linalg.norm(mu_f - mu_e))
 
+    # ------------------------------------------------------------------
+    # 5. Two-cut sequential classifier
+    #    Axis 1 (rotated I): separates g from (e+f)
+    #    Axis 2 (rotated Q): separates e from f
+    # ------------------------------------------------------------------
+    def _rotate_Q(I, Q, angle):
+        z = np.asarray(I, dtype=float) + 1j * np.asarray(Q, dtype=float)
+        return np.imag(z * np.exp(-1j * angle))
+
+    Qg_r = _rotate_Q(Ig, Qg, theta)
+    Qe_r = _rotate_Q(Ie, Qe, theta)
+    Qf_r = _rotate_Q(If, Qf, theta)
+
+    # g is always on the lower-I side by construction of the ge rotation
+    g_ef_threshold, _ = _get_threshold_optimized(Ig_r, np.concatenate([Ie_r, If_r]))
+
+    # e vs f on Q: auto-detect which blob has lower mean Q after rotation
+    f_is_below_ge_f = float(np.mean(Qf_r)) < float(np.mean(Qe_r))
+    if f_is_below_ge_f:
+        ge_f_threshold, _ = _get_threshold_optimized(Qf_r, Qe_r)
+    else:
+        ge_f_threshold, _ = _get_threshold_optimized(Qe_r, Qf_r)
+
+    # Vectorised classification
+    def _classify_two_cut(I_r, Q_r):
+        pred = np.zeros(len(I_r), dtype=int)  # default g
+        not_g = I_r > g_ef_threshold
+        if f_is_below_ge_f:
+            pred[not_g & (Q_r <= ge_f_threshold)] = 2  # f
+            pred[not_g & (Q_r > ge_f_threshold)] = 1   # e
+        else:
+            pred[not_g & (Q_r > ge_f_threshold)] = 2   # f
+            pred[not_g & (Q_r <= ge_f_threshold)] = 1  # e
+        return pred
+
+    all_Ir = np.concatenate([Ig_r, Ie_r, If_r])
+    all_Qr = np.concatenate([Qg_r, Qe_r, Qf_r])
+    pred_two_cut = _classify_two_cut(all_Ir, all_Qr)
+    confusion_two_cut = _confusion_matrix_3state(true_all, pred_two_cut)
+
     return {
         "mu_g": mu_g,
         "mu_e": mu_e,
@@ -206,6 +283,18 @@ def _compute_classifiers(Ig, Qg, Ie, Qe, If, Qf):
         "d_ge_over_sigma": float(d_ge / sigma_rms) if sigma_rms > 0 else None,
         "d_gf_over_sigma": float(d_gf / sigma_rms) if sigma_rms > 0 else None,
         "d_ef_over_sigma": float(d_ef / sigma_rms) if sigma_rms > 0 else None,
+        # Two-cut
+        "gef_g_ef_threshold": g_ef_threshold,
+        "gef_ge_f_threshold": ge_f_threshold,
+        "gef_f_is_below_ge_f": f_is_below_ge_f,
+        "confusion_matrix_two_cut": confusion_two_cut,
+        # Rotated Q arrays needed for plots (passed through for downstream use)
+        "_Qg_r": Qg_r,
+        "_Qe_r": Qe_r,
+        "_Qf_r": Qf_r,
+        "_Ig_r": Ig_r,
+        "_Ie_r": Ie_r,
+        "_If_r": If_r,
     }
 
 
@@ -259,8 +348,22 @@ def fit_gaussian_centers(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
         "rotation_angle_rad", "threshold_low", "threshold_high",
         "d_ge_V", "d_gf_V", "d_ef_V", "sigma_rms_V",
         "d_ge_over_sigma", "d_gf_over_sigma", "d_ef_over_sigma",
+        "gef_g_ef_threshold", "gef_ge_f_threshold",
     ]
     data_vars = {p: (["qubit"], [fit_results[q][p] for q in qubit_names]) for p in scalar_params}
+
+    # gef_f_is_below_ge_f stored as int (0/1) for xarray compatibility
+    data_vars["gef_f_is_below_ge_f"] = (
+        ["qubit"],
+        [int(fit_results[q]["gef_f_is_below_ge_f"]) for q in qubit_names],
+    )
+
+    # Store per-qubit rotated arrays (shot dimension may differ per qubit; keep as object arrays)
+    for key in ("_Ig_r", "_Qg_r", "_Ie_r", "_Qe_r", "_If_r", "_Qf_r"):
+        data_vars[key] = (
+            ["qubit", "n_runs"],
+            np.stack([fit_results[q][key] for q in qubit_names], axis=0),
+        )
 
     # Matrix vars: shape (qubit, 3, 3) for confusion matrices, (qubit, 2, 2) for LDA sigma
     data_vars["confusion_matrix_nc"] = (
@@ -274,6 +377,10 @@ def fit_gaussian_centers(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
     data_vars["confusion_matrix_1d"] = (
         ["qubit", "prepared", "measured"],
         np.stack([fit_results[q]["confusion_matrix_1d"] for q in qubit_names], axis=0),
+    )
+    data_vars["confusion_matrix_two_cut"] = (
+        ["qubit", "prepared", "measured"],
+        np.stack([fit_results[q]["confusion_matrix_two_cut"] for q in qubit_names], axis=0),
     )
     data_vars["lda_sigma"] = (
         ["qubit", "IQ_row", "IQ_col"],
@@ -345,6 +452,10 @@ def _extract_relevant_fit_parameters(fit: xr.Dataset, node: QualibrationNode):
             d_ge_over_sigma=float(fq.d_ge_over_sigma) if fq.d_ge_over_sigma.item() is not None else None,
             d_gf_over_sigma=float(fq.d_gf_over_sigma) if fq.d_gf_over_sigma.item() is not None else None,
             d_ef_over_sigma=float(fq.d_ef_over_sigma) if fq.d_ef_over_sigma.item() is not None else None,
+            gef_g_ef_threshold=float(fq.gef_g_ef_threshold),
+            gef_ge_f_threshold=float(fq.gef_ge_f_threshold),
+            gef_f_is_below_ge_f=bool(int(fq.gef_f_is_below_ge_f)),
+            confusion_matrix_two_cut=fq.confusion_matrix_two_cut.values.tolist(),
             success=True,
         )
 

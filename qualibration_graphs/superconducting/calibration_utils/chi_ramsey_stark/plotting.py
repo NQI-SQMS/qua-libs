@@ -1,4 +1,4 @@
-"""Plotting routines for the Ramsey Stark-shift chi calibration (node 25)."""
+"""Plotting routines for the Fock |1> qubit Ramsey chi calibration (node 25)."""
 from __future__ import annotations
 
 from typing import Dict
@@ -6,21 +6,19 @@ from typing import Dict
 import matplotlib.pyplot as plt
 import numpy as np
 
-from .analysis import RamseyStarkFit
+from .analysis import FockChiFit, _damped_cosine
 
 
 def plot_ramsey_stark(
     dataset,
     qubits,
-    fit_results: Dict[str, RamseyStarkFit],
+    fit_results: Dict[str, FockChiFit],
     mode_name: str = "alice",
 ) -> plt.Figure:
-    """
-    Plot the Ramsey Stark-shift experiment.
+    """Plot the Fock |1> qubit Ramsey experiment used to extract chi.
 
-    Left panel  — Ramsey oscillations for every cavity drive amplitude (colour-
-                  coded by amplitude).
-    Right panel — Frequency shift Δf vs A² with linear fit; χ annotation.
+    One panel per qubit: Ramsey oscillation vs idle time with decaying cosine
+    fit overlay, annotated with chi and T2*.
 
     Parameters
     ----------
@@ -31,97 +29,74 @@ def plot_ramsey_stark(
     """
     n_qubits = len(qubits)
     fig, axes = plt.subplots(
-        n_qubits, 2,
-        figsize=(13, 4.5 * max(n_qubits, 1)),
+        1, n_qubits,
+        figsize=(6 * max(n_qubits, 1), 4.5),
         squeeze=False,
     )
 
-    amplitudes = np.asarray(dataset.coords["drive_amplitude"].values, dtype=float)
-    tau_ns = np.asarray(dataset.coords["delay"].values, dtype=float)
+    tau_ns = np.asarray(dataset.coords["idle_time"].values, dtype=float)
     tau_us = tau_ns / 1e3
 
-    cmap = plt.cm.viridis
-    amp_colors = [cmap(j / max(len(amplitudes) - 1, 1)) for j in range(len(amplitudes))]
-
-    # XarrayDataFetcher groups state1/state2/... → "state" with qubit dim
-    use_state = "state" in dataset or any(f"state{i+1}" in dataset for i in range(len(amplitudes)))
+    use_state = "state" in dataset or any(f"state{i+1}" in dataset for i in range(n_qubits))
 
     for i, qubit in enumerate(qubits):
-        ax_traces = axes[i, 0]
-        ax_chi    = axes[i, 1]
+        ax = axes[0, i]
         res = fit_results.get(qubit.name)
 
-        # ── Left: Ramsey traces ───────────────────────────────────────────────
-        # Try grouped key first ("state"/"I"), then fall back to indexed ("state1"/"I1")
-        key_candidates = (["state", f"state{i+1}"] if use_state else ["I", f"I{i+1}"])
+        # Raw signal
+        key_candidates = ["state", f"state{i+1}"] if use_state else ["I", f"I{i+1}"]
         raw = None
         for key in key_candidates:
             if key in dataset:
                 try:
                     da = dataset[key]
                     if "qubit" in da.dims:
-                        raw = da.sel(qubit=qubit.name).values  # (n_amp, n_tau)
+                        raw = da.sel(qubit=qubit.name).values
                     else:
                         raw = da.values
                     break
                 except Exception:
                     pass
         if raw is None:
-            raw = np.full((len(amplitudes), len(tau_ns)), np.nan)
+            raw = np.full(len(tau_ns), np.nan)
 
-        for j, (amp, color) in enumerate(zip(amplitudes, amp_colors)):
-            ax_traces.plot(
-                tau_us, raw[j, :],
-                color=color, alpha=0.75, linewidth=0.9,
-                label=f"A={amp:.2f}",
+        ax.plot(tau_us, raw, color="steelblue", alpha=0.8, lw=1.0, label="Data")
+
+        if res is not None and res.success:
+            # Fit overlay
+            tau_fit = np.linspace(tau_ns[0], tau_ns[-1], 500)
+            A0 = (np.nanmax(raw) - np.nanmin(raw)) / 2.0
+            c0 = np.nanmean(raw)
+            fit_curve = _damped_cosine(
+                tau_fit,
+                A0,
+                res.ramsey_T2_ns,
+                res.ramsey_freq_hz,
+                0.0,
+                c0,
             )
+            ax.plot(tau_fit / 1e3, fit_curve, color="tomato", lw=2.0, label="Fit")
 
-        ax_traces.set_xlabel("Ramsey delay (µs)")
-        ax_traces.set_ylabel("P(|e⟩)" if use_state else "I (a.u.)")
-        ax_traces.set_title(
-            f"{qubit.name} · {mode_name}: Ramsey traces\n"
-            f"(colour = cavity drive amplitude)"
-        )
-        # Compact legend with two columns
-        ax_traces.legend(fontsize=7, ncol=2, loc="upper right")
-
-        # ── Right: Δf vs A² with fit ──────────────────────────────────────────
-        if res is None or not res.success:
-            ax_chi.set_title(f"{qubit.name}: fit failed")
-            continue
-
-        amp_sq = np.array(res.amplitudes) ** 2
-        df_khz = np.array(res.delta_freq_hz) / 1e3  # → kHz
-        valid  = np.isfinite(df_khz)
-
-        ax_chi.scatter(
-            amp_sq[valid], df_khz[valid],
-            color="steelblue", zorder=5, s=60, label="Data",
-        )
-
-        # Fit line
-        x_fit = np.linspace(0.0, amp_sq.max() * 1.05, 200)
-        y_fit = res.chi_slope_hz_per_amp2 * x_fit / 1e3   # kHz
-        ax_chi.plot(x_fit, y_fit, color="tomato", lw=2.0, label="Linear fit")
-
-        # Annotation
-        slope_mhz = res.chi_slope_hz_per_amp2 / 1e6
-        ann_lines = [f"Slope: {slope_mhz:.3f} MHz/A²"]
-        if res.chi_hz is not None:
-            ann_lines.append(f"χ = {res.chi_hz / 1e6:.3f} MHz")
+            chi_mhz = res.chi_hz / 1e6
+            t2_us = res.ramsey_T2_ns / 1e3
+            ann = (
+                f"χ = {chi_mhz:.4f} MHz\n"
+                f"T2* = {t2_us:.2f} µs\n"
+                f"f_osc = {res.ramsey_freq_hz / 1e6:.4f} MHz"
+            )
+            ax.text(
+                0.97, 0.97, ann,
+                transform=ax.transAxes, va="top", ha="right", fontsize=10,
+                bbox=dict(boxstyle="round,pad=0.4", facecolor="white", alpha=0.85),
+            )
+            title_suffix = f"χ = {chi_mhz:.4f} MHz"
         else:
-            ann_lines.append("χ: displacement_k not calibrated")
-        ax_chi.text(
-            0.05, 0.95, "\n".join(ann_lines),
-            transform=ax_chi.transAxes, va="top", fontsize=10,
-            bbox=dict(boxstyle="round,pad=0.4", facecolor="white", alpha=0.85),
-        )
+            title_suffix = "fit failed"
 
-        ax_chi.set_xlabel("Drive amplitude² (A²)")
-        ax_chi.set_ylabel("Ramsey frequency shift Δf (kHz)")
-        ax_chi.set_title(f"{qubit.name} · {mode_name}: Δf vs A²  →  χ")
-        ax_chi.legend()
-        ax_chi.axhline(0, color="grey", lw=0.7, linestyle="--")
+        ax.set_xlabel("Idle time (µs)")
+        ax.set_ylabel("P(|e⟩)" if use_state else "I (a.u.)")
+        ax.set_title(f"{qubit.name} · {mode_name} Fock|1⟩ Ramsey\n{title_suffix}")
+        ax.legend(loc="upper right", fontsize=9)
 
     fig.tight_layout()
     return fig

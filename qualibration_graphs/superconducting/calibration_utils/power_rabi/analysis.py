@@ -114,10 +114,10 @@ def fit_raw_data(ds: xr.Dataset, node: QualibrationNode) -> Tuple[xr.Dataset, di
         Dataset containing the fit results.
     """
     max_pulses = getattr(node.parameters, "max_number_pulses_per_sweep", 1)
-    _is_ef = not hasattr(node.parameters, "operation")
-    operation = getattr(node.parameters, "operation", "EF_x180" if _is_ef else "x180")
+    _is_ef = not hasattr(node.parameters, "max_number_pulses_per_sweep")
+    operation = getattr(node.parameters, "operation", "EF_x180")
     if max_pulses == 1:
-        ds_fit = ds if _is_ef else ds.sel(nb_of_pulses=1)
+        ds_fit = ds if "nb_of_pulses" not in ds.dims else ds.sel(nb_of_pulses=1)
         # Fit the power Rabi oscillations
         if node.parameters.use_state_discrimination:
             fit_vals = fit_oscillation(ds_fit.state, "amp_prefactor")

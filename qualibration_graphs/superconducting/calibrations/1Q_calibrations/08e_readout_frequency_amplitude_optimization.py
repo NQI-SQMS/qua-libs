@@ -82,7 +82,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     n_runs = node.parameters.num_shots  # Number of runs
     # The frequency sweep around the resonator resonance frequency
     span = node.parameters.frequency_span_in_mhz * u.MHz
-    dfs = np.linspace(-span / 2, +span / 2, node.parameters.frequency_num_points)
+    dfs = np.round(np.linspace(-span / 2, +span / 2, node.parameters.frequency_num_points)).astype(int)
     # The readout amplitude sweep, as a log-spaced prefactor of the nominal readout amplitude
     amps = np.logspace(
         np.log10(node.parameters.min_amp_factor),
@@ -110,7 +110,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
             with for_(n, 0, n < n_runs, n + 1):
                 save(n, n_st)
-                with for_(*from_array(df, dfs)):
+                with for_each_(df, dfs):
                     # --- Frequency detuning ---
                     for i, qubit in multiplexed_qubits.items():
                         # Update the resonator frequencies for all resonators

@@ -30,6 +30,8 @@ class NodeSpecificParameters(RunnableParameters):
     becomes off-resonant, producing a dip in the excitation probability."""
     use_state_discrimination: bool = True
     """True → measure qubit state (recommended). False → measure raw I/Q."""
+    use_confusion_matrix_correction: bool = False
+    """Apply ge confusion matrix correction to averaged state probabilities."""
     min_dip_fraction: float = 0.05
     """Minimum dip depth as a fraction of the signal range. Shallower dips are rejected."""
     subtract_baseline: bool = True

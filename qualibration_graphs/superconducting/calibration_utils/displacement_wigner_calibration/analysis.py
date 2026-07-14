@@ -132,7 +132,7 @@ def resolve_parity_time_ns(node: QualibrationNode) -> int:
     if chi_hz is None:
         raise ValueError(
             "Cannot determine parity_time_ns: set node.parameters.parity_time_ns "
-            "or node.parameters.chi_hz (or run node 30 first to populate chi on "
+            "or node.parameters.chi_hz (or run node 28 first to populate chi on "
             "CavityTransmonPair)."
         )
     # τ = 1/(2·peak_spacing) = 1/(2·2·chi_hz) = 1/(4·chi_hz)

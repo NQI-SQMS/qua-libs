@@ -12,6 +12,7 @@ from qualang_tools.results import progress_counter
 from qualang_tools.units import unit
 
 from qualibrate import QualibrationNode
+from calibration_utils.shared import apply_confusion_matrix_correction, _get_cavity_mode
 from quam_config import Quam
 from calibration_utils.cavity_mode_spectroscopy import (
     Parameters,
@@ -71,15 +72,6 @@ def custom_param(node: QualibrationNode[Parameters, Quam]):
 
 
 node.machine = Quam.load()
-
-
-def _get_cavity_mode(node):
-    mode_name = node.parameters.mode_name
-    for cav in node.machine.cavities.values():
-        mode = getattr(cav, mode_name, None)
-        if mode is not None:
-            return mode
-    raise KeyError(f"Cavity mode '{mode_name}' not found in machine.cavities")
 
 
 # %% {Create_QUA_program}
@@ -273,6 +265,8 @@ def load_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def analyse_data(node: QualibrationNode[Parameters, Quam]):
     """Fit the cavity resonance dip and extract the cavity frequency."""
+    if node.parameters.use_state_discrimination and node.parameters.use_confusion_matrix_correction:
+        node.results["ds_raw"] = apply_confusion_matrix_correction(node.results["ds_raw"], node.namespace["qubits"])
     node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
     node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}

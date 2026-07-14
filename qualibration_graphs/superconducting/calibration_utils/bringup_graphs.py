@@ -4,9 +4,12 @@ Shared subgraph builders and condition functions for fixed-frequency transmon br
 Used by:
   - calibrations/1Q_calibrations/02f_resonator_bringup_graph.py
   - calibrations/1Q_calibrations/03d_qubit_bringup_graph.py
-  - calibrations/1Q_calibrations/92_calibration_graph_bringup_fixed_frequency_transmon_adaptive.py
+  - calibrations/1Q_calibrations/91_ge_readout_optimization_graph.py
+  - calibrations/1Q_calibrations/91b_gef_readout_optimization_graph.py
+  - calibrations/1Q_calibrations/92_ge_bringup_graph.py
   - calibrations/1Q_calibrations/93_ef_bringup_graph.py
   - calibrations/1Q_calibrations/94_cavity_bringup_graph.py
+  - calibrations/1Q_calibrations/95_sideband_bringup_graph.py
   - calibrations/1Q_calibrations/05_x180_fine_calibration_graph.py  (helpers only)
 """
 
@@ -21,17 +24,13 @@ logger = logging.getLogger(__name__)
 
 
 # ── Inner subgraph parameter stubs ────────────────────────────────────────────
-# Minimal classes for the nested subgraphs; actual calibration parameters are
-# read from the outer graph via graph.parameters.
 
 class _ResonatorDiscoverySubgraphParameters(GraphParameters):
     qubits: List[str] = ["q0"]
-    multiplexed: bool = False
 
 
 class _ResonatorBringUpSubgraphParameters(GraphParameters):
     qubits: List[str] = ["q0"]
-    multiplexed: bool = False
 
 
 class _QubitCalibrationSubgraphParameters(GraphParameters):
@@ -147,6 +146,13 @@ def should_repeat_displacement_vacuum(node: QualibrationNode, target: str) -> bo
             "retrying with escalated amplitude/duration."
         )
         return True
+    if error_code == int(DisplacementVacuumErrorCode.SPAN_TOO_LARGE):
+        logger.info(
+            f"{target}: Displacement vacuum calibration span too large "
+            f"({DisplacementVacuumErrorCode(error_code).name}); "
+            "retrying with reduced amp_max."
+        )
+        return True
     if error_code == int(DisplacementVacuumErrorCode.FIT_FAILED):
         logger.warning(f"{target}: Displacement vacuum calibration fit failed; not retrying automatically.")
         return False
@@ -226,22 +232,6 @@ def build_resonator_bringup(
         → resonator_spectroscopy_high_power  [loop: retry_resonator_discovery]
         → resonator_punch_out                [loop: repeat_punch_out]
         → resonator_spectroscopy_low_power
-
-    Reads the following attributes from ``graph.parameters``::
-
-        multiplexed
-        broad_frequency_span_mhz, broad_frequency_step_mhz, broad_num_shots,
-        broad_peak_prominence, broad_peak_width, blacklist_exclusion_radius_mhz,
-        broad_readout_power_dbm, broad_max_amp
-        high_power_frequency_span_mhz, high_power_frequency_step_mhz,
-        high_power_num_shots, high_power_readout_power_dbm, high_power_max_amp,
-        punch_out_frequency_span_mhz, punch_out_frequency_step_mhz,
-        punch_out_min_power_dbm, punch_out_max_power_dbm, punch_out_num_power_points,
-        punch_out_max_amp, punch_out_num_shots, punch_out_frequency_shift_threshold_hz,
-        use_adaptive_span
-        low_power_frequency_span_mhz, low_power_frequency_step_mhz,
-        low_power_num_shots, low_power_readout_power_dbm, low_power_max_amp
-        max_resonator_discovery_iterations, max_punch_out_iterations
     """
     p = graph.parameters
     with QualibrationGraph.build(
@@ -297,12 +287,12 @@ def build_resonator_bringup(
             multiplexed=p.multiplexed,
             frequency_span_in_mhz=2.0,
             frequency_step_in_mhz=0.01,
-            min_power_dbm=-20,
-            max_power_dbm=0,
+            min_power_dbm=-20.0,
+            max_power_dbm=0.0,
             num_power_points=10,
             max_amp=0.4,
             num_shots=200,
-            frequency_shift_threshold_in_hz=0.1e6,
+            frequency_shift_threshold_in_hz=100_000.0,
             use_adaptive_span=p.use_adaptive_span,
             sweep_left_offset_mhz=1.0,
         )
@@ -342,25 +332,6 @@ def build_qubit_calibration(
 
         qubit_spectroscopy_vs_power  [inner loop: repeat_spec_vs_power]
         → time_rabi
-
-    The 1D qubit spectroscopy step is omitted: the power-broadening fit inside
-    spec_vs_power already provides a well-calibrated frequency and amplitude.
-
-    The caller is responsible for adding the returned subgraph to the outer
-    graph and registering the outer loop with ``should_restart_qubit_calibration``.
-
-    Reads the following attributes from ``graph.parameters``::
-
-        multiplexed
-        spec_vs_power_frequency_span_mhz, spec_vs_power_frequency_step_mhz,
-        spec_vs_power_num_power_points, spec_vs_power_num_shots,
-        spec_vs_power_min_power_dbm, spec_vs_power_max_power_dbm,
-        spec_vs_power_operation, spec_vs_power_operation_len_ns,
-        spec_vs_power_max_amplitude_opx, spec_vs_power_rabi_target_periods,
-        spec_vs_power_rabi_sweep_max_duration_ns
-        time_rabi_min_duration_ns, time_rabi_max_duration_ns, time_rabi_duration_step_ns,
-        time_rabi_num_shots, time_rabi_operation_amplitude_factor, time_rabi_drive_power_dbm
-        max_spec_vs_power_iterations
     """
     p = graph.parameters
     with QualibrationGraph.build(
@@ -377,8 +348,8 @@ def build_qubit_calibration(
             frequency_step_in_mhz=1.0,
             num_power_points=10,
             num_shots=100,
-            min_power_dbm=-60,
-            max_power_dbm=10,
+            min_power_dbm=-60.0,
+            max_power_dbm=10.0,
             operation="saturation",
             operation_len_in_ns=20_000,
             linewidth_threshold_hz=1e6,
@@ -498,7 +469,6 @@ def _restore_initial_state(machine, target: str, loop_state: dict) -> None:
 
 class _X180FineCalibrationSubgraphParameters(GraphParameters):
     qubits: List[str] = ["q0"]
-    multiplexed: bool = False
 
 
 class _RabiRamseySubgraphParameters(GraphParameters):
@@ -516,17 +486,6 @@ def build_x180_fine_calibration(
 
     On fit failure the pre-loop state is restored.  The loop state is isolated
     per call so concurrent or sequential graphs do not share state.
-
-    Reads the following attributes from ``graph.parameters``::
-
-        multiplexed
-        x180_rabi_min_amp_factor, x180_rabi_max_amp_factor,
-        x180_rabi_amp_factor_step, x180_rabi_num_shots,
-        x180_rabi_max_number_pulses_per_sweep
-        x180_ramsey_num_shots, x180_ramsey_frequency_detuning_in_mhz,
-        x180_ramsey_max_wait_time_in_ns, x180_ramsey_wait_time_num_points,
-        x180_ramsey_log_or_linear_sweep
-        x180_freq_threshold_hz, x180_max_iterations
     """
     p = graph.parameters
 
@@ -670,8 +629,6 @@ def build_x180_fine_calibration(
                 use_adaptive=p.x180_rabi_use_adaptive,
             )
             ramsey_rabi.add_node(power_rabi)
-            # Inner loop: retry power_rabi until the period count is correct
-            # (TOO_MANY or TOO_FEW), before proceeding to Ramsey.
             ramsey_rabi.loop(
                 power_rabi,
                 on=should_repeat_rabi_amplitude,
@@ -992,7 +949,10 @@ def build_cavity_bringup(
         cavity_mode_spectroscopy
         → displacement_calibration
         → cavity_T1
+        → cavity_T2
         → parity_time_measurement
+        → fock1_T1
+        → fock1_T2
 
     The cavity mode is selected via ``graph.parameters.cavity_mode_name``.
     Should be appended after the EF bringup (or readout_power_opt if EF is
@@ -1013,8 +973,17 @@ def build_cavity_bringup(
         max_displacement_vacuum_iterations,
         cavity_t1_min_wait_ns, cavity_t1_max_wait_ns, cavity_t1_num_points,
         cavity_t1_num_shots,
+        cavity_t2_min_wait_ns, cavity_t2_max_wait_ns, cavity_t2_num_points,
+        cavity_t2_num_shots, cavity_t2_displacement_alpha,
+        cavity_t2_ramsey_detuning_hz,
         parity_min_delay_ns, parity_max_delay_ns, parity_delay_step_ns,
-        parity_num_shots
+        parity_num_shots,
+        fock1_t1_min_wait_ns, fock1_t1_max_wait_ns, fock1_t1_num_points,
+        fock1_t1_num_shots, fock1_t1_prep_method,
+        fock1_t1_alpha1, fock1_t1_alpha2,
+        fock1_t2_min_wait_ns, fock1_t2_max_wait_ns, fock1_t2_num_points,
+        fock1_t2_num_shots, fock1_t2_prep_method,
+        fock1_t2_alpha1, fock1_t2_alpha2, fock1_t2_ramsey_detuning_hz
     """
     p = graph.parameters
     mode = p.cavity_mode_name
@@ -1027,33 +996,32 @@ def build_cavity_bringup(
         cav_spec = library.nodes["21_cavity_mode_spectroscopy"].copy(
             name="cavity_mode_spectroscopy",
             mode_name=mode,
-            frequency_span_in_mhz=p.cavity_spec_frequency_span_mhz,
-            frequency_step_in_mhz=p.cavity_spec_frequency_step_mhz,
-            operation=p.cavity_spec_operation,
-            operation_len_in_ns=p.cavity_spec_operation_len_in_ns,
-            operation_amplitude_factor=p.cavity_spec_amplitude_factor,
-            num_shots=p.cavity_spec_num_shots,
-            qubit_probe_operation=p.cavity_spec_qubit_probe_operation,
-            use_state_discrimination=p.cavity_spec_use_state_discrimination,
-            min_dip_fraction=p.cavity_spec_min_dip_fraction,
-            subtract_baseline=p.cavity_spec_subtract_baseline,
+            frequency_span_in_mhz=25.0,
+            frequency_step_in_mhz=0.1,
+            operation="saturation",
+            operation_len_in_ns=1_000,
+            operation_amplitude_factor=0.01,
+            num_shots=100,
+            qubit_probe_operation="selective_x180",
+            use_state_discrimination=True,
+            min_dip_fraction=0.05,
+            subtract_baseline=True,
         )
         cavity_bringup.add_node(cav_spec)
 
         displ = library.nodes["22_displacement_calibration_vacuum"].copy(
             name="displacement_calibration",
             mode_name=mode,
-            amp_min=p.cavity_disp_amp_min,
-            amp_max=p.cavity_disp_amp_max,
-            amp_points=p.cavity_disp_amp_points,
-            num_shots=p.cavity_disp_num_shots,
-            qubit_pulse=p.cavity_disp_qubit_pulse,
-            cavity_reset_type=p.cavity_disp_cavity_reset_type,
-            active_reset=p.cavity_disp_active_reset,
-            use_state_discrimination=p.cavity_disp_use_state_discrimination,
-            subtract_baseline=p.cavity_disp_subtract_baseline,
-            use_adaptive=p.cavity_disp_use_adaptive,
-            target_n_sigma=p.cavity_disp_target_n_sigma,
+            amp_min=-4.0,
+            amp_max=4.0,
+            amp_points=61,
+            num_shots=200,
+            qubit_pulse="selective_x180",
+            cavity_reset_type="thermal",
+            use_state_discrimination=True,
+            subtract_baseline=True,
+            use_adaptive=True,
+            target_n_sigma=5.0,
         )
         cavity_bringup.add_node(displ)
         cavity_bringup.loop(
@@ -1065,35 +1033,245 @@ def build_cavity_bringup(
         cav_t1 = library.nodes["23_cavity_coherent_T1"].copy(
             name="cavity_T1",
             mode_name=mode,
-            min_wait_time_in_ns=p.cavity_t1_min_wait_ns,
-            max_wait_time_in_ns=p.cavity_t1_max_wait_ns,
-            wait_time_num_points=p.cavity_t1_num_points,
-            num_shots=p.cavity_t1_num_shots,
-            log_or_linear_sweep=p.cavity_t1_log_or_linear_sweep,
-            displacement_scale=p.cavity_t1_displacement_scale,
-            use_state_discrimination=p.cavity_t1_use_state_discrimination,
-            cavity_reset_type=p.cavity_t1_cavity_reset_type,
+            min_wait_time_in_ns=40,
+            max_wait_time_in_ns=5_000_000,
+            wait_time_num_points=21,
+            num_shots=500,
+            log_or_linear_sweep="linear",
+            displacement_alpha=1.0,
+            use_state_discrimination=True,
+            cavity_reset_type="thermal",
         )
         cavity_bringup.add_node(cav_t1)
 
-        parity = library.nodes["30_parity_time_measurement"].copy(
+        cav_t2 = library.nodes["27_cavity_coherent_T2"].copy(
+            name="cavity_T2",
+            mode_name=mode,
+            min_wait_time_in_ns=40,
+            max_wait_time_in_ns=2_000_000,
+            wait_time_num_points=21,
+            num_shots=500,
+            displacement_alpha=1.0,
+            ramsey_detuning_hz=1000.0,
+            use_state_discrimination=True,
+            cavity_reset_type="thermal",
+        )
+        cavity_bringup.add_node(cav_t2)
+
+        parity = library.nodes["28_parity_time_measurement"].copy(
             name="parity_time_measurement",
             mode_name=mode,
-            min_delay_ns=p.parity_min_delay_ns,
-            max_delay_ns=p.parity_max_delay_ns,
-            delay_step_ns=p.parity_delay_step_ns,
-            num_shots=p.parity_num_shots,
-            displacement_scale=p.parity_displacement_scale,
-            use_state_discrimination=p.parity_use_state_discrimination,
-            cavity_reset_type=p.parity_cavity_reset_type,
+            min_delay_ns=16,
+            max_delay_ns=4000,
+            delay_step_ns=16,
+            num_shots=1000,
+            displacement_scale=0.5,
+            use_state_discrimination=True,
+            cavity_reset_type="thermal",
         )
         cavity_bringup.add_node(parity)
 
+        fock1_t1 = library.nodes["33_cavity_fock1_T1"].copy(
+            name="fock1_T1",
+            mode_name=mode,
+            min_wait_time_in_ns=40,
+            max_wait_time_in_ns=5_000_000,
+            wait_time_num_points=21,
+            num_shots=500,
+            fock1_prep_method="sideband",
+            fock1_alpha1=1.0,
+            fock1_alpha2=-0.59,
+            use_state_discrimination=True,
+            cavity_reset_type="thermal",
+        )
+        cavity_bringup.add_node(fock1_t1)
+
+        fock1_t2 = library.nodes["34_cavity_fock1_T2"].copy(
+            name="fock1_T2",
+            mode_name=mode,
+            min_wait_time_in_ns=40,
+            max_wait_time_in_ns=2_000_000,
+            wait_time_num_points=21,
+            num_shots=500,
+            fock1_prep_method="sideband",
+            fock1_alpha1=1.0,
+            fock1_alpha2=-0.59,
+            ramsey_detuning_hz=400.0,
+            use_state_discrimination=True,
+            cavity_reset_type="thermal",
+        )
+        cavity_bringup.add_node(fock1_t2)
+
         cavity_bringup.connect(cav_spec, displ)
         cavity_bringup.connect(displ, cav_t1)
-        cavity_bringup.connect(cav_t1, parity)
+        cavity_bringup.connect(cav_t1, cav_t2)
+        cavity_bringup.connect(cav_t2, parity)
+        cavity_bringup.connect(parity, fock1_t1)
+        cavity_bringup.connect(fock1_t1, fock1_t2)
 
     return cavity_bringup
+
+
+# ── Sideband bringup subgraph builder ─────────────────────────────────────────
+
+class _SidebandBringUpSubgraphParameters(GraphParameters):
+    qubits: List[str] = ["q0"]
+    mode_name: str = "alice"
+
+
+def build_sideband_bringup(
+    graph: QualibrationGraph, library: QualibrationLibrary
+) -> QualibrationGraph:
+    """Build and return the ``sideband_bringup`` subgraph.
+
+    Calibrates the single f|k>g|k+1> sideband transition selected by
+    ``graph.parameters.sideband_level`` (1-based: 1 → f0g1, 2 → f1g2, …).
+    The calibration chain for level k = sideband_level − 1 is::
+
+        f{k}g{k+1}_spectroscopy
+        → f{k}g{k+1}_time_rabi
+        → f{k}g{k+1}_ramsey          (sideband frequency fine-tuning)
+        → f{k}g{k+1}_ge_spectroscopy (qubit GE shift in Fock |k>)
+        → f{k}g{k+1}_ge_ramsey       (precise qubit GE frequency at Fock |k>)
+        → f{k}g{k+1}_ef_spectroscopy (qubit EF shift in Fock |k>)
+        → f{k}g{k+1}_ef_ramsey       (Kerr-corrected EF frequency)
+
+    Note: ``sideband_level`` is read from ``graph.parameters`` at build time and
+    determines the graph structure.  Changing it after the graph is built has no
+    effect; reload the library (re-run the graph file) to apply a new value.
+
+    Reads the following attributes from ``graph.parameters``::
+
+        qubits, mode_name, sideband_level, cavity_thermalization_time_ns,
+        spec_frequency_span_mhz, spec_frequency_step_mhz,
+        spec_amplitude_factor, spec_operation_len_ns, spec_num_shots,
+        rabi_min_duration_ns, rabi_max_duration_ns,
+        rabi_duration_step_ns, rabi_num_shots,
+        ramsey_min_wait_ns, ramsey_max_wait_ns,
+        ramsey_num_points, ramsey_artificial_detuning_hz, ramsey_num_shots,
+        ge_spec_frequency_span_mhz, ge_spec_frequency_step_mhz,
+        ge_spec_operation_len_ns, ge_spec_num_shots,
+        ge_ramsey_min_wait_ns, ge_ramsey_max_wait_ns,
+        ge_ramsey_num_points, ge_ramsey_frequency_detuning_mhz, ge_ramsey_num_shots,
+        ef_spec_frequency_span_mhz, ef_spec_frequency_step_mhz,
+        ef_spec_operation_len_ns, ef_spec_num_shots,
+        ef_ramsey_min_wait_ns, ef_ramsey_max_wait_ns,
+        ef_ramsey_num_points, ef_ramsey_frequency_detuning_mhz, ef_ramsey_num_shots,
+        fock_cavity_reset_type
+    """
+    p = graph.parameters
+
+    with QualibrationGraph.build(
+        "sideband_bringup",
+        parameters=_SidebandBringUpSubgraphParameters(),
+    ) as sideband_bringup:
+
+        k = p.sideband_level - 1
+        kp1 = k + 1
+        therm = 200_000
+        qubits = p.qubits
+        mode = p.mode_name
+        fock_reset = "thermal"
+
+        lbl_spec      = f"f{k}g{kp1}_spectroscopy"
+        lbl_rabi      = f"f{k}g{kp1}_time_rabi"
+        lbl_ramsey    = f"f{k}g{kp1}_ramsey"
+        lbl_ge_spec   = f"f{k}g{kp1}_ge_spectroscopy"
+        lbl_ge_ramsey = f"f{k}g{kp1}_ge_ramsey"
+        lbl_ef_spec   = f"f{k}g{kp1}_ef_spectroscopy"
+        lbl_ef_ramsey = f"f{k}g{kp1}_ef_ramsey"
+
+        n_spec = library.nodes["26_fNgN1_spectroscopy"].copy(
+            name=lbl_spec,
+            qubits=qubits,
+            mode_name=mode,
+            fock_level=k,
+            frequency_span_in_mhz=10.0,
+            frequency_step_in_mhz=0.05,
+            operation_amplitude_factor=1.0,
+            operation_len_in_ns=20_000,
+            num_shots=500,
+        )
+        n_rabi = library.nodes["26b_fNgN1_time_rabi"].copy(
+            name=lbl_rabi,
+            qubits=qubits,
+            mode_name=mode,
+            fock_level=k,
+            min_duration_ns=16,
+            max_duration_ns=20_000,
+            duration_step_ns=4,
+            num_shots=100,
+            cavity_thermalization_time_ns=therm,
+        )
+        n_ramsey = library.nodes["26c_fNgN1_ramsey"].copy(
+            name=lbl_ramsey,
+            qubits=qubits,
+            mode_name=mode,
+            fock_level=k,
+            min_wait_ns=16,
+            max_wait_ns=5_000,
+            num_wait_points=101,
+            artificial_detuning_hz=1e6,
+            num_shots=200,
+        )
+        n_ge_spec = library.nodes["26e_fNgN1_qubit_ge_spectroscopy"].copy(
+            name=lbl_ge_spec,
+            qubits=qubits,
+            mode_name=mode,
+            fock_level=k,
+            frequency_span_in_mhz=5.0,
+            frequency_step_in_mhz=0.05,
+            operation_len_in_ns=20_000,
+            num_shots=300,
+            cavity_reset_type=fock_reset,
+        )
+        n_ge_ramsey = library.nodes["26f_fNgN1_ge_ramsey"].copy(
+            name=lbl_ge_ramsey,
+            qubits=qubits,
+            mode_name=mode,
+            fock_level=k,
+            min_wait_ns=16,
+            max_wait_ns=5_000,
+            num_wait_points=101,
+            frequency_detuning_in_mhz=1.0,
+            num_shots=300,
+            cavity_reset_type=fock_reset,
+        )
+        n_ef_spec = library.nodes["26g_fNgN1_qubit_ef_spectroscopy"].copy(
+            name=lbl_ef_spec,
+            qubits=qubits,
+            mode_name=mode,
+            fock_level=k,
+            frequency_span_in_mhz=5.0,
+            frequency_step_in_mhz=0.05,
+            operation_len_in_ns=20_000,
+            num_shots=300,
+            cavity_reset_type=fock_reset,
+        )
+        n_ef_ramsey = library.nodes["26h_fNgN1_ef_ramsey"].copy(
+            name=lbl_ef_ramsey,
+            qubits=qubits,
+            mode_name=mode,
+            fock_level=k,
+            min_wait_ns=16,
+            max_wait_ns=5_000,
+            num_wait_points=101,
+            frequency_detuning_in_mhz=1.0,
+            num_shots=300,
+            cavity_reset_type=fock_reset,
+        )
+
+        for node in [n_spec, n_rabi, n_ramsey, n_ge_spec, n_ge_ramsey, n_ef_spec, n_ef_ramsey]:
+            sideband_bringup.add_node(node)
+
+        sideband_bringup.connect(n_spec, n_rabi)
+        sideband_bringup.connect(n_rabi, n_ramsey)
+        sideband_bringup.connect(n_ramsey, n_ge_spec)
+        sideband_bringup.connect(n_ge_spec, n_ge_ramsey)
+        sideband_bringup.connect(n_ge_ramsey, n_ef_spec)
+        sideband_bringup.connect(n_ef_spec, n_ef_ramsey)
+
+    return sideband_bringup
 
 
 # ── TWPA bringup subgraph builder ───────────────────────────────────────────────
@@ -1177,3 +1355,144 @@ def build_twpa_bringup(
         twpa_bringup.connect(freq_sweep, saturation)
 
     return twpa_bringup
+
+
+# ── GE readout optimization subgraph builder ───────────────────────────────────
+
+class _GEReadoutOptSubgraphParameters(GraphParameters):
+    qubits: List[str] = ["q0"]
+
+
+def build_ge_readout_optimization(
+    graph: QualibrationGraph, library: QualibrationLibrary
+) -> QualibrationGraph:
+    """Build and return the ``ge_readout_optimization`` subgraph.
+
+    Sequence (all sequential, no retry loops)::
+
+        readout_length_optimization  (08d)
+        → readout_frequency_optimization  (08a)
+        → readout_power_optimization  (08b)
+        → iq_blobs  (07)
+
+    Node parameters are hardcoded to standard defaults.  ``multiplexed`` is
+    forwarded from ``graph.parameters`` when the outer graph exposes it.
+    """
+    p = graph.parameters
+    multiplexed = getattr(p, "multiplexed", False)
+
+    with QualibrationGraph.build(
+        "ge_readout_optimization",
+        parameters=_GEReadoutOptSubgraphParameters(),
+    ) as ge_readout_opt:
+
+        readout_length_opt = library.nodes["08d_readout_length_optimization"].copy(
+            name="readout_length_optimization",
+            max_readout_length_in_ns=12000,
+            division_length_in_ns=160,
+            num_shots=2000,
+            readout_operation="readout",
+            cos_weight_name="iw1",
+            sin_weight_name="iw2",
+            minus_sin_weight_name="iw3",
+        )
+        ge_readout_opt.add_node(readout_length_opt)
+
+        readout_freq_opt = library.nodes["08a_readout_frequency_optimization"].copy(
+            name="readout_frequency_optimization",
+            multiplexed=multiplexed,
+            num_shots=100,
+            frequency_span_in_mhz=20.0,
+            frequency_step_in_mhz=0.1,
+        )
+        ge_readout_opt.add_node(readout_freq_opt)
+
+        readout_power_opt = library.nodes["08b_readout_power_optimization"].copy(
+            name="readout_power_optimization",
+            num_shots=2000,
+            start_amp=0.5,
+            end_amp=1.5,
+            num_amps=10,
+            outliers_threshold=0.98,
+            plot_raw=False,
+        )
+        ge_readout_opt.add_node(readout_power_opt)
+
+        iq_blobs = library.nodes["07_iq_blobs"].copy(
+            name="iq_blobs",
+            num_shots=2000,
+        )
+        ge_readout_opt.add_node(iq_blobs)
+
+        ge_readout_opt.connect(readout_length_opt, readout_freq_opt)
+        ge_readout_opt.connect(readout_freq_opt, readout_power_opt)
+        ge_readout_opt.connect(readout_power_opt, iq_blobs)
+
+    return ge_readout_opt
+
+
+# ── GEF readout optimization subgraph builder ──────────────────────────────────
+
+class _GEFReadoutOptSubgraphParameters(GraphParameters):
+    qubits: List[str] = ["q0"]
+
+
+def build_gef_readout_optimization(
+    graph: QualibrationGraph, library: QualibrationLibrary
+) -> QualibrationGraph:
+    """Build and return the ``gef_readout_optimization`` subgraph.
+
+    Sequence (all sequential, no retry loops)::
+
+        gef_readout_length_optimization  (14c)
+        → gef_readout_frequency_optimization  (14)
+        → gef_readout_power_optimization  (14b)
+        → gef_iq_blobs  (15)
+
+    Node parameters are hardcoded to standard defaults.
+    """
+    with QualibrationGraph.build(
+        "gef_readout_optimization",
+        parameters=_GEFReadoutOptSubgraphParameters(),
+    ) as gef_readout_opt:
+
+        gef_length_opt = library.nodes["14c_readout_gef_length_optimization"].copy(
+            name="gef_readout_length_optimization",
+            num_shots=2000,
+            max_readout_length_in_ns=4000,
+            division_length_in_ns=16,
+            readout_operation="readout",
+            cos_weight_name="iw1",
+            sin_weight_name="iw2",
+            minus_sin_weight_name="iw3",
+        )
+        gef_readout_opt.add_node(gef_length_opt)
+
+        gef_freq_opt = library.nodes["14_gef_frequency_optimization"].copy(
+            name="gef_readout_frequency_optimization",
+            num_shots=100,
+            frequency_span_in_mhz=2.0,
+            frequency_step_in_mhz=0.01,
+        )
+        gef_readout_opt.add_node(gef_freq_opt)
+
+        gef_power_opt = library.nodes["14b_readout_gef_power_optimization"].copy(
+            name="gef_readout_power_optimization",
+            num_shots=200,
+            min_amp_factor=0.1,
+            max_amp_factor=1.9,
+            num_amps=30,
+        )
+        gef_readout_opt.add_node(gef_power_opt)
+
+        gef_iq_blobs = library.nodes["15_iq_blobs_gef"].copy(
+            name="gef_iq_blobs",
+            num_shots=2000,
+        )
+        gef_readout_opt.add_node(gef_iq_blobs)
+
+        gef_readout_opt.connect(gef_length_opt, gef_freq_opt)
+        gef_readout_opt.connect(gef_freq_opt, gef_power_opt)
+        gef_readout_opt.connect(gef_power_opt, gef_iq_blobs)
+
+    return gef_readout_opt

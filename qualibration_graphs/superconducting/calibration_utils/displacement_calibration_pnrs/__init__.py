@@ -1,4 +1,4 @@
-"""Calibration utilities for node 28 — displacement calibration via photon-number splitting."""
+"""Calibration utilities for node 26 — displacement calibration via photon-number splitting."""
 from calibration_utils.displacement_calibration_pnrs.parameters import Parameters
 from calibration_utils.displacement_calibration_pnrs.analysis import (
     FitParameters,

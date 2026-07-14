@@ -84,6 +84,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
+        "n_runs": xr.DataArray(np.arange(n_avg), attrs={"long_name": "shot index"}),
         "amp_prefactor": xr.DataArray(amps, attrs={"long_name": "readout amplitude scale factor"}),
     }
 
@@ -150,12 +151,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
-                I_g_st[i].buffer(len(amps)).average().save(f"Ig{i + 1}")
-                Q_g_st[i].buffer(len(amps)).average().save(f"Qg{i + 1}")
-                I_e_st[i].buffer(len(amps)).average().save(f"Ie{i + 1}")
-                Q_e_st[i].buffer(len(amps)).average().save(f"Qe{i + 1}")
-                I_f_st[i].buffer(len(amps)).average().save(f"If{i + 1}")
-                Q_f_st[i].buffer(len(amps)).average().save(f"Qf{i + 1}")
+                I_g_st[i].buffer(len(amps)).buffer(n_avg).save(f"Ig{i + 1}")
+                Q_g_st[i].buffer(len(amps)).buffer(n_avg).save(f"Qg{i + 1}")
+                I_e_st[i].buffer(len(amps)).buffer(n_avg).save(f"Ie{i + 1}")
+                Q_e_st[i].buffer(len(amps)).buffer(n_avg).save(f"Qe{i + 1}")
+                I_f_st[i].buffer(len(amps)).buffer(n_avg).save(f"If{i + 1}")
+                Q_f_st[i].buffer(len(amps)).buffer(n_avg).save(f"Qf{i + 1}")
 
 
 # %% {Simulate}

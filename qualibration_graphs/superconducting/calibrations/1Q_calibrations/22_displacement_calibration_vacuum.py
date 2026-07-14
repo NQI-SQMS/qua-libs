@@ -1,4 +1,4 @@
-# %% {Imports}
+﻿# %% {Imports}
 import logging
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,6 +17,7 @@ from quam_config import Quam
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.runtime import simulate_and_plot
 from qualibration_libs.data import XarrayDataFetcher
+from calibration_utils.shared import apply_confusion_matrix_correction, _get_cavity_mode
 from calibration_utils.displacement_calibration_vacuum import (
     Parameters,
     FitParameters,
@@ -31,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 # %% {Node initialisation}
 description = """
-        DISPLACEMENT VACUUM-POPULATION CALIBRATION (35) — dual-sequence with baseline
+        DISPLACEMENT VACUUM-POPULATION CALIBRATION (35) â€” dual-sequence with baseline
 
 Calibrates the unit displacement amplitude by sweeping the cavity displacement
 amplitude and measuring the vacuum-state population with a selective qubit π-pulse.
@@ -41,18 +42,18 @@ resonator IQ response shifts as a function of displacement amplitude even when t
 is untouched.  To remove this spurious baseline, each averaging iteration now runs TWO
 sub-sequences for every amplitude point:
 
-  PART 1 — Baseline (no qubit π-pulse):
+  PART 1 â€” Baseline (no qubit π-pulse):
     1a. Reset cavity + qubit.
-    1b. Displace cavity to |α = a · A_unit⟩.
+    1b. Displace cavity to |α = a Â· A_unit⟩.
     1c. Measure readout IQ  →  I_base, Q_base  (cross-Kerr offset only).
-  PART 2 — Signal (full protocol):
+  PART 2 â€” Signal (full protocol):
     2a. Reset cavity + qubit (independent reset, same conditions as Part 1).
     2b. Displace cavity identically.
-    2c. Apply selective_x180 (or x180) on qubit — flips qubit only when cavity is in |0⟩.
+    2c. Apply selective_x180 (or x180) on qubit â€” flips qubit only when cavity is in |0⟩.
     2d. Measure readout IQ  →  I, Q  (cross-Kerr offset + vacuum-population signal).
 
 Post-processing (in analysis.py, before state discrimination):
-    I_corr(a) = I(a) - I_base(a)    ≈  P_vacuum(a) · (I_e - I_g)
+    I_corr(a) = I(a) - I_base(a)    â‰ˆ  P_vacuum(a) Â· (I_e - I_g)
     Q_corr(a) = Q(a) - Q_base(a)
 
 This subtraction is performed in the IQ (Volt) domain, BEFORE any threshold or
@@ -60,7 +61,7 @@ state-discrimination logic is applied, so that the cross-Kerr offset does not bi
 the vacuum-population estimate.
 
 The measured signal after subtraction:
-    I_corr(a) = amplitude · exp(-(a / A_1ph)²) + offset
+    I_corr(a) = amplitude Â· exp(-(a / A_1ph)Â²) + offset
 
 where A_1ph = sigma is the amplitude_scale that produces exactly 1 photon on average.
 
@@ -93,15 +94,6 @@ def custom_param(node: QualibrationNode[Parameters, Quam]):
 
 
 node.machine = Quam.load()
-
-
-def _get_cavity_mode(node):
-    mode_name = node.parameters.mode_name
-    for cav in node.machine.cavities.values():
-        mode = getattr(cav, mode_name, None)
-        if mode is not None:
-            return mode
-    raise KeyError(f"Cavity mode '{mode_name}' not found in machine.cavities")
 
 
 # %% {Create_QUA_program}
@@ -159,7 +151,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
     with program() as node.namespace["qua_program"]:
         # --- QUA variable declarations ---
-        # I/Q: signal sequence (with qubit π-pulse) — always present.
+        # I/Q: signal sequence (with qubit π-pulse) â€” always present.
         I, I_st, Q, Q_st, n, n_st = node.machine.declare_qua_variables()
 
         # I_base/Q_base: baseline sequence (no π-pulse).
@@ -193,7 +185,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 with for_(*from_array(a, amp_array)):
 
                     # ============================================================
-                    # PART 1 — BASELINE measurement (only when subtract_baseline=True)
+                    # PART 1 â€” BASELINE measurement (only when subtract_baseline=True)
                     # ============================================================
                     # Purpose: capture the bare readout-resonator IQ response at each
                     # displacement amplitude WITHOUT any qubit drive.  The cavity-
@@ -213,7 +205,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                 sideband_drive=sideband_drive,
                                 qubit_thermalization_time=qubit.thermalization_time,
                                 fock_n=node.parameters.cavity_active_cooling_fock_n,
-                                f0g1_pulse_duration_ns=node.parameters.f0g1_pulse_duration_ns,
+                                sideband_pulse_duration_ns=node.parameters.sideband_pulse_duration_ns,
                             )
                             qubit.reset(
                                 node.parameters.reset_type,
@@ -221,7 +213,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                 log_callable=node.log,
                             )
 
-                        # Displace the cavity to the coherent state |α = a · A_unit⟩.
+                        # Displace the cavity to the coherent state |α = a Â· A_unit⟩.
                         # align() with no args synchronises ALL QUA elements (including
                         # cavity_mode_drive, which is on a separate channel from xy/resonator).
                         align()
@@ -232,7 +224,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         else:
                             cavity_mode.cavity_mode_drive.play("displacement", amplitude_scale=a)
 
-                        # NO qubit π-pulse here — the qubit stays in |g⟩.
+                        # NO qubit π-pulse here â€” the qubit stays in |g⟩.
                         # The readout captures only the cross-Kerr-induced IQ shift
                         # from the displaced cavity, with no vacuum-population signal.
 
@@ -248,7 +240,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
                     # ============================================================
-                    # PART 2 — SIGNAL measurement (full protocol, WITH π-pulse)
+                    # PART 2 â€” SIGNAL measurement (full protocol, WITH π-pulse)
                     # ============================================================
                     # This block is always executed regardless of subtract_baseline.
                     # When subtract_baseline=True it is preceded by Part 1 (above),
@@ -268,7 +260,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             sideband_drive=sideband_drive,
                             qubit_thermalization_time=qubit.thermalization_time,
                             fock_n=node.parameters.cavity_active_cooling_fock_n,
-                            f0g1_pulse_duration_ns=node.parameters.f0g1_pulse_duration_ns,
+                            sideband_pulse_duration_ns=node.parameters.sideband_pulse_duration_ns,
                         )
                         qubit.reset(
                             node.parameters.reset_type,
@@ -376,6 +368,8 @@ def load_data(node: QualibrationNode[Parameters, Quam]):
 # %% {Analyse_data}
 @node.run_action(skip_if=node.parameters.simulate)
 def analyse_data(node: QualibrationNode[Parameters, Quam]):
+    if node.parameters.use_state_discrimination and node.parameters.use_confusion_matrix_correction:
+        node.results["ds_raw"] = apply_confusion_matrix_correction(node.results["ds_raw"], node.namespace["qubits"])
     node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
     node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}
@@ -426,18 +420,41 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
     with node.record_state_updates():
         for qubit in node.namespace["qubits"]:
             res = node.results["fit_results"].get(qubit.name)
-            if res is None or not res["success"]:
+            if res is None:
                 continue
 
-            sigma = res["sigma"]
             error_code = DisplacementVacuumErrorCode(
                 res.get("error_code", int(DisplacementVacuumErrorCode.SUCCESS))
             )
+
+            # -- Adaptive: shrink span when the sweep is far too wide ------------
+            if node.parameters.use_adaptive and error_code == DisplacementVacuumErrorCode.SPAN_TOO_LARGE:
+                sigma_hint = res.get("sigma_hint", float("nan"))
+                if np.isfinite(sigma_hint) and sigma_hint > 0:
+                    new_amp_max = sigma_hint * target_n_sigma * 1.5 * node.namespace.get("current_alpha_max", 1.0)
+                else:
+                    new_amp_max = node.parameters.amp_max / 5.0
+                node.parameters.amp_max = new_amp_max
+                node.parameters.amp_min = -new_amp_max
+                node.log(
+                    f"[Adaptive] {qubit.name}: SPAN_TOO_LARGE "
+                    f"(only {res.get('sigma_hint', float('nan')):.3f} amp_scale units of signal visible). "
+                    f"Shrinking sweep: amp_max {node.parameters.amp_max:.2f} -> {new_amp_max:.2f} photons."
+                )
+                res["corrective_action"] = int(DisplacementVacuumCorrectiveAction.SHRINK_AMPLITUDE_SPAN)
+                res["action_magnitude"] = float(new_amp_max)
+                node.outcomes[qubit.name] = "failed"  # force graph-level retry
+                continue
+
+            if not res["success"]:
+                continue
+
+            sigma = res["sigma"]
             mode_name = node.parameters.mode_name
             pair_key = f"{qubit.name}_{mode_name}"
             pairs = getattr(node.machine, "cavity_transmon_pairs", None)
 
-            # ── Adaptive: escalate amplitude (gain-locked) or duration ──────────
+            # -- Adaptive: escalate amplitude (gain-locked) or duration ----------
             if node.parameters.use_adaptive and error_code == DisplacementVacuumErrorCode.INSUFFICIENT_RANGE_COVERAGE:
                 # Required base-amplitude scale factor so that, at the current
                 # AMP_SCALE_LIMIT, the sweep would cover target_n_sigma * sigma:
@@ -462,7 +479,7 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                         new_base_amp = float(cavity_mode.cavity_mode_drive.operations["displacement"].amplitude)
                         node.log(
                             f"[Adaptive] {qubit.name}: INSUFFICIENT_RANGE_COVERAGE "
-                            f"(coverage={res['coverage_ratio']:.2f}σ < {target_n_sigma}σ). "
+                            f"(coverage={res['coverage_ratio']:.2f}Ïƒ < {target_n_sigma}Ïƒ). "
                             f"Raising displacement base amplitude (gain-locked): "
                             f"{base_amp:.4f} V -> {new_base_amp:.4f} V."
                         )
@@ -496,8 +513,8 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 node.outcomes[qubit.name] = "failed"  # force graph-level retry
                 continue
 
-            # ── Full coverage achieved (or use_adaptive=False): calibrate alpha_max ──
-            # Auto-compute alpha_max: fill DAC to MAX_VOLTAGE / AMP_SCALE_LIMIT ≈ 0.263 V.
+            # -- Full coverage achieved (or use_adaptive=False): calibrate alpha_max --
+            # Auto-compute alpha_max: fill DAC to MAX_VOLTAGE / AMP_SCALE_LIMIT â‰ˆ 0.263 V.
             # amplitude_scale=1 → alpha_max photons; firmware limit AMP_SCALE_LIMIT gives
             # max accessible alpha = alpha_max * AMP_SCALE_LIMIT.
             alpha_max = MAX_VOLTAGE / (base_amp * sigma * AMP_SCALE_LIMIT)
@@ -523,7 +540,7 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 f"stored amplitude={cal_amplitude:.6f} V  "
                 f"(amplitude_scale=1 -> {alpha_max:.2f} photons, "
                 f"max safe alpha={alpha_max * AMP_SCALE_LIMIT:.2f}, "
-                f"coverage={res['coverage_ratio']:.2f}σ)"
+                f"coverage={res['coverage_ratio']:.2f}Ïƒ)"
             )
 
             break  # one cavity mode shared across all qubits in this run

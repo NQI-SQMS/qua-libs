@@ -109,6 +109,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     # Register the sweep axes to be added to the dataset when fetching data
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
+        "n_runs": xr.DataArray(np.arange(n_runs), attrs={"long_name": "shot index"}),
         "frequency": xr.DataArray(frequencies, attrs={"long_name": "readout frequency shift in MHz"}),
     }
 
@@ -185,12 +186,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
-                I_g_st[i].buffer(len(frequencies)).average().save(f"Ig{i + 1}")
-                Q_g_st[i].buffer(len(frequencies)).average().save(f"Qg{i + 1}")
-                I_e_st[i].buffer(len(frequencies)).average().save(f"Ie{i + 1}")
-                Q_e_st[i].buffer(len(frequencies)).average().save(f"Qe{i + 1}")
-                I_f_st[i].buffer(len(frequencies)).average().save(f"If{i + 1}")
-                Q_f_st[i].buffer(len(frequencies)).average().save(f"Qf{i + 1}")
+                I_g_st[i].buffer(len(frequencies)).buffer(n_runs).save(f"Ig{i + 1}")
+                Q_g_st[i].buffer(len(frequencies)).buffer(n_runs).save(f"Qg{i + 1}")
+                I_e_st[i].buffer(len(frequencies)).buffer(n_runs).save(f"Ie{i + 1}")
+                Q_e_st[i].buffer(len(frequencies)).buffer(n_runs).save(f"Qe{i + 1}")
+                I_f_st[i].buffer(len(frequencies)).buffer(n_runs).save(f"If{i + 1}")
+                Q_f_st[i].buffer(len(frequencies)).buffer(n_runs).save(f"Qf{i + 1}")
 
 
 # %% {Simulate}
@@ -233,7 +234,6 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
         node.log(job.execution_report())
     # Register the raw dataset
     node.results["ds_raw"] = dataset
-    node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
 
 
 # %%
@@ -256,6 +256,7 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
     Analyse the raw data and store the fitted data in another xarray dataset "ds_fit"
     and the fitted results in the "fit_results" dictionary.
     """
+    node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
     node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}
 
@@ -275,7 +276,7 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
     qubit.grid_location.
     """
     fig = plot_distances_with_fit(
-        node.results["ds_raw"],
+        node.results["ds_fit"],
         node.namespace["qubits"],
         node.results["ds_fit"],
     )

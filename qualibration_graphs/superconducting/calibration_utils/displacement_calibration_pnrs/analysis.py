@@ -1,4 +1,4 @@
-"""Analysis for displacement calibration via photon-number splitting (node 28).
+"""Analysis for displacement calibration via photon-number splitting (node 26).
 
 Experiment:
   For each displacement amplitude A, a qubit spectroscopy scan is performed.

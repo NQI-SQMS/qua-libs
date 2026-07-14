@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+﻿from typing import Literal, Optional
 
 from qualibrate import NodeParameters
 from qualibrate.core.parameters import RunnableParameters
@@ -27,8 +27,8 @@ class NodeSpecificParameters(RunnableParameters):
     max_peaks: int = 8
     """Maximum number of photon-number peaks to try when fitting."""
     chi2_threshold: float = 0.005
-    """Reduced chi² threshold for stopping peak search.  The auto-fitter adds
-    peaks until chi² drops below this value.  Lower values force more peaks to
+    """Reduced chiÂ² threshold for stopping peak search.  The auto-fitter adds
+    peaks until chiÂ² drops below this value.  Lower values force more peaks to
     be tried before stopping; raise if over-fitting noise, lower if weak peaks
     are missed.  The 3% amplitude floor in the fitter already prevents purely
     spurious peaks from being accepted."""
@@ -38,20 +38,22 @@ class NodeSpecificParameters(RunnableParameters):
     or 'x180' (standard pi-pulse, faster but lower frequency resolution)."""
     cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
     """How to reset the cavity between shots.
-    'thermal'        — wait thermalization_time_factor × T1 (passive decay).
-    'active_sideband'— drive f0g1 π-pulses to actively remove photons; requires a
+    'thermal'        â€” wait thermalization_time_factor × T1 (passive decay).
+    'active_sideband'â€” drive f0g1 π-pulses to actively remove photons; requires a
                        calibrated f0g1_pi operation on the sideband_drive of the
                        corresponding CavityTransmonPair."""
     cavity_active_cooling_fock_n: int = 1
     """Starting Fock level for active sideband cooling (only used when
     cavity_reset_type='active_sideband').  Set to 1 for thermal state cooling;
     set higher if you know the cavity contains multiple photons."""
-    f0g1_pulse_duration_ns: Optional[int] = None
+    sideband_pulse_duration_ns: Optional[int] = None
     """Override the f0g1 sideband pulse duration [ns] during active cooling.
     When None (default), the calibrated f0g1_pi pulse length is used.
     Must be a multiple of 4 ns."""
     use_state_discrimination: bool = True
     """True -> measure qubit state. False -> measure raw I/Q."""
+    use_confusion_matrix_correction: bool = False
+    """Apply ge confusion matrix correction to averaged state probabilities."""
     normalize_plot: bool = False
     """When True and use_state_discrimination=False, normalize the plotted I signal
     to [0, 1] using min-max scaling.  Has no effect when use_state_discrimination=True."""

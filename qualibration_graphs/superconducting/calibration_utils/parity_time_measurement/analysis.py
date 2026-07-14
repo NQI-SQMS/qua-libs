@@ -1,4 +1,4 @@
-"""Analysis routines for the parity-time calibration (node 30).
+"""Analysis routines for the parity-time calibration (node 28).
 
 Physics
 -------

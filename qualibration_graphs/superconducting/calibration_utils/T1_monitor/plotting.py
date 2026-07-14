@@ -1,4 +1,4 @@
-"""Plotting utilities for the T1 monitor node (node 31)."""
+"""Plotting utilities for the T1 monitor node (node 29)."""
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.figure import Figure

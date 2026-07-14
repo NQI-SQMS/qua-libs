@@ -18,6 +18,7 @@ from qualibration_libs.parameters import get_qubits
 from qualibration_libs.parameters.sweep import get_idle_times_in_clock_cycles
 from qualibration_libs.runtime import simulate_and_plot
 from qualibration_libs.data import XarrayDataFetcher
+from calibration_utils.shared import apply_confusion_matrix_correction, _get_cavity_mode
 from calibration_utils.cavity_coherent_T1 import (
     Parameters,
     CoherentT1Fit,
@@ -41,27 +42,27 @@ a coherent state |α⟩ and probing the vacuum-state population with a selective
 qubit π-pulse.
 
 Sequence (per wait time t):
-  1. Thermalize cavity (wait ≥ 5×T1) and reset qubit.
+  1. Thermalize cavity (wait â‰¥ 5×T1) and reset qubit.
   2. Apply displacement pulse: amplitude_scale = displacement_alpha / displacement_alpha_max.
   3. Wait for total time t = delay_repeats × t_per_rep.
-  4. Apply selective_x180 on qubit — flips qubit only when cavity is in |0⟩.
+  4. Apply selective_x180 on qubit â€” flips qubit only when cavity is in |0⟩.
   5. Measure qubit state.
 
 The measured signal is:
-    P_e(t) = A · exp(−|α₀|² · exp(−t / T1)) + offset
+    P_e(t) = A Â· exp(-|αâ‚€|Â² Â· exp(-t / T1)) + offset
 
-where |α₀|² = displacement_alpha² and T1 is the cavity photon lifetime.
+where |αâ‚€|Â² = displacement_alphaÂ² and T1 is the cavity photon lifetime.
 
-Fitting extracts T1 and |α₀|².  The dataset is augmented with the inferred
-photon-number decay |α(t)|² = −ln((P_e − offset) / A), plotted as a simple
-exponential: |α₀|² · exp(−t / T1).
+Fitting extracts T1 and |αâ‚€|Â².  The dataset is augmented with the inferred
+photon-number decay |α(t)|Â² = -ln((P_e - offset) / A), plotted as a simple
+exponential: |αâ‚€|Â² Â· exp(-t / T1).
 
 Parameters:
   - mode_name:           Cavity mode to probe ('alice' or 'bob').
   - displacement_alpha:  Desired coherent-state amplitude α.
                          amplitude_scale = displacement_alpha / displacement_alpha_max
                          (displacement_alpha_max read from CavityTransmonPair QuAM state).
-                         After node 30/32 calibration: displacement_alpha=1 → 1 photon.
+                         After node 26/30 calibration: displacement_alpha=1 → 1 photon.
   - min/max_wait_time_in_ns / wait_time_num_points: time sweep range.
   - delay_repeats:       Multiply effective wait time to extend range.
 
@@ -70,7 +71,7 @@ State updates:
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="23_cavity_mode_coherent_T1",
+    name="23_cavity_coherent_T1",
     description=description,
     parameters=Parameters(),
 )
@@ -89,15 +90,6 @@ def custom_param(node: QualibrationNode[Parameters, Quam]):
 
 
 node.machine = Quam.load()
-
-
-def _get_cavity_mode(node):
-    mode_name = node.parameters.mode_name
-    for cav in node.machine.cavities.values():
-        mode = getattr(cav, mode_name, None)
-        if mode is not None:
-            return mode
-    raise KeyError(f"Cavity mode '{mode_name}' not found in machine.cavities")
 
 
 # %% {Create_QUA_program}
@@ -133,7 +125,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         raise ValueError(
             f"displacement_alpha={node.parameters.displacement_alpha} / "
             f"alpha_max={alpha_max} = {amplitude_scale:.4f} exceeds the QUA "
-            f"hardware limit ±{_AMP_MAX:.6f}.  Reduce displacement_alpha."
+            f"hardware limit Â±{_AMP_MAX:.6f}.  Reduce displacement_alpha."
         )
     node.namespace["amplitude_scale"] = amplitude_scale
     node.log(
@@ -193,7 +185,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 with for_each_(t, t_per_rep_clk.tolist()):
 
                     # ============================================================
-                    # PART 1 — BASELINE measurement (only when subtract_baseline=True)
+                    # PART 1 â€” BASELINE measurement (only when subtract_baseline=True)
                     # ============================================================
                     # Purpose: capture the bare readout-resonator IQ response at each
                     # wait time WITHOUT any qubit drive.  The cavity-resonator cross-Kerr
@@ -210,7 +202,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                 sideband_drive=sideband_drive,
                                 qubit_thermalization_time=qubit.thermalization_time,
                                 fock_n=node.parameters.cavity_active_cooling_fock_n,
-                                f0g1_pulse_duration_ns=node.parameters.f0g1_pulse_duration_ns,
+                                sideband_pulse_duration_ns=node.parameters.sideband_pulse_duration_ns,
                             )
                             qubit.reset(
                                 node.parameters.reset_type,
@@ -231,7 +223,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             for i, qubit in multiplexed_qubits.items():
                                 qubit.xy.wait(t)
 
-                        # NO selective π-pulse — qubit stays in |g⟩.
+                        # NO selective π-pulse â€” qubit stays in |g⟩.
                         # Measure baseline IQ (cross-Kerr shift only, no vacuum signal).
                         align()
                         for i, qubit in multiplexed_qubits.items():
@@ -242,7 +234,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         align()
 
                     # ============================================================
-                    # PART 2 — SIGNAL measurement (full protocol, WITH π-pulse)
+                    # PART 2 â€” SIGNAL measurement (full protocol, WITH π-pulse)
                     # ============================================================
                     # --- Reset cavity and qubit BEFORE displacement ---
                     sideband_drive = node.namespace["sideband_drive"]
@@ -254,7 +246,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             sideband_drive=sideband_drive,
                             qubit_thermalization_time=qubit.thermalization_time,
                             fock_n=node.parameters.cavity_active_cooling_fock_n,
-                            f0g1_pulse_duration_ns=node.parameters.f0g1_pulse_duration_ns,
+                            sideband_pulse_duration_ns=node.parameters.sideband_pulse_duration_ns,
                         )
                         qubit.reset(
                             node.parameters.reset_type,
@@ -349,6 +341,8 @@ def load_data(node: QualibrationNode[Parameters, Quam]):
 # %% {Analyse_data}
 @node.run_action(skip_if=node.parameters.simulate)
 def analyse_data(node: QualibrationNode[Parameters, Quam]):
+    if node.parameters.use_state_discrimination and node.parameters.use_confusion_matrix_correction:
+        node.results["ds_raw"] = apply_confusion_matrix_correction(node.results["ds_raw"], node.namespace["qubits"])
     node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
     node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}

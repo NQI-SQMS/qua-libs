@@ -16,14 +16,14 @@ class NodeSpecificParameters(RunnableParameters):
     """Which cavity mode to probe: 'alice' or 'bob'."""
     cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
     """How to reset the cavity before each displacement.
-    'thermal'         — wait thermalization_time_factor × T1 (passive decay).
-    'active_sideband' — drive f0g1 π-pulses to actively remove photons; requires a
+    'thermal'         â€” wait thermalization_time_factor × T1 (passive decay).
+    'active_sideband' â€” drive f0g1 π-pulses to actively remove photons; requires a
                         calibrated f0g1_pi operation on the sideband_drive of the
                         corresponding CavityTransmonPair."""
     cavity_active_cooling_fock_n: int = 1
     """Starting Fock level for active sideband cooling (only used when
     cavity_reset_type='active_sideband').  Set to 1 for thermal state cooling."""
-    f0g1_pulse_duration_ns: Optional[int] = None
+    sideband_pulse_duration_ns: Optional[int] = None
     """Override the f0g1 sideband pulse duration [ns] during active cooling.
     When None (default), the calibrated f0g1_pi pulse length is used.
     Set to a longer value (e.g. several ms) to ensure the cavity photon
@@ -34,10 +34,10 @@ class NodeSpecificParameters(RunnableParameters):
     The actual QUA amplitude_scale is computed at runtime as
         amplitude_scale = displacement_alpha / displacement_alpha_max
     where displacement_alpha_max is read from the CavityTransmonPair in the
-    QuAM state (set by node 30/32 calibration).
-    displacement_alpha = 1 → |α|² = 1 mean photon after calibration.
+    QuAM state (set by node 26/30 calibration).
+    displacement_alpha = 1 → |α|Â² = 1 mean photon after calibration.
     The runtime check ensures amplitude_scale stays within the QUA hardware
-    limit ±(2 − 2^−16)."""
+    limit Â±(2 - 2^-16)."""
     delay_repeats: int = 1
     """Number of times to repeat the wait per point.  Extends the effective
     sweep range: total time = delay_repeats × t_per_rep × 4 ns.
@@ -52,6 +52,8 @@ class NodeSpecificParameters(RunnableParameters):
     If False, only the standard single-sequence protocol is executed."""
     use_state_discrimination: bool = True
     """True → measure qubit state. False → measure raw I quadrature."""
+    use_confusion_matrix_correction: bool = False
+    """Apply ge confusion matrix correction to averaged state probabilities."""
     normalize_plot: bool = False
     """When True and use_state_discrimination=False, normalize the plotted I signal
     to [0, 1] so the decay starts at 1 (full vacuum-state signal) and the baseline

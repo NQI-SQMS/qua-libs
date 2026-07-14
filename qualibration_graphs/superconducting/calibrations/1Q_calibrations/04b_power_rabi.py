@@ -101,7 +101,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     # Apply operation_length_in_ns override before config generation (modifies QUAM in-memory)
     if node.parameters.operation_length_in_ns is not None:
         for qubit in qubits:
-            qubit.xy.operations[operation].length = node.parameters.operation_length_in_ns
+            op = qubit.xy.operations[operation]
+            try:
+                op.length = node.parameters.operation_length_in_ns
+            except ValueError:
+                op.length = None  # clear reference first
+                op.length = node.parameters.operation_length_in_ns
 
     with program() as node.namespace["qua_program"]:
         I, I_st, Q, Q_st, n, n_st = node.machine.declare_qua_variables()
@@ -565,10 +570,13 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                                 q.xy.operations["selective_x180"].amplitude = safe_amp / 100
                             except (ValueError, KeyError, AttributeError):
                                 pass
-                    # Save the pulse length used in this run
+                    # Save the pulse length used in this run, but only if not a reference
                     pulse_len = fit_result.get("pulse_length_ns", float("nan"))
                     if np.isfinite(pulse_len):
-                        operation.length = int(pulse_len)
+                        try:
+                            operation.length = int(pulse_len)
+                        except ValueError:
+                            pass  # length is a reference; skip to preserve it
                     if node.parameters.use_adaptive:
                         # If duration adaptation was active, keep the adapted length and
                         # clear the temp fields so future runs start fresh.

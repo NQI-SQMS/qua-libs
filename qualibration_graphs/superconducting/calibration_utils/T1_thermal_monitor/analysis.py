@@ -1,5 +1,5 @@
 """
-Analysis utilities for the T1 + T2* + T2 echo + thermal population monitor node (node 34).
+Analysis utilities for the T1 + T2* + T2 echo + thermal population monitor node (node 32).
 
 Each iteration runs:
   1. T1 decay sweep → T1 [µs]

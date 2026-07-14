@@ -2,7 +2,7 @@ from dataclasses import field
 from typing import Any, Dict, List, Optional
 
 from quam.core import QuamBase, quam_dataclass
-from quam_builder.architecture.superconducting.qpu import CavityQuam, FluxTunableQuam
+from quam_builder.architecture.superconducting.qpu import CavityQuam, FixedFrequencyQuam
 
 
 @quam_dataclass
@@ -48,17 +48,16 @@ class TemporaryCalibrationData(QuamBase):
 
 
 @quam_dataclass
-class Quam(CavityQuam, FluxTunableQuam):
-    """QUAM for flux-tunable transmons (with tunable couplers) coupled to SRF cavities.
+class Quam(CavityQuam, FixedFrequencyQuam):
+    """QUAM for a fixed-frequency transmon coupled to SRF cavities.
 
+    Combines CavityQuam (adds cavities + cavity_transmon_pairs) with
+    FixedFrequencyQuam (fixed-frequency transmon qubits, no flux lines).
     Adds `temp_calibration`: per-qubit temporary state used by adaptive calibration nodes.
 
     The load() override fixes a QUAM serialisation quirk where Octave loopbacks
     (Tuple[Tuple[str,str],str]) are round-tripped through JSON as nested lists,
     which typeguard rejects on reload.
-
-    FluxTunableQuam.initialize_qpu already activates the TWPA(s) and sets qubit/coupler
-    flux points, so no override is needed here.
     """
 
     temp_calibration: Dict[str, TemporaryCalibrationData] = None

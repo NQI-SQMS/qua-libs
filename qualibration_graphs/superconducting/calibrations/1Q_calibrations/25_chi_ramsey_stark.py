@@ -6,20 +6,30 @@ import xarray as xr
 from dataclasses import asdict
 
 from qm.qua import *
-
+from qm.qua.lib import Cast
 
 from qualang_tools.multi_user import qm_session
 from qualang_tools.results import progress_counter
 from qualang_tools.units import unit
 
 from qualibrate import QualibrationNode
+from calibration_utils.shared import (
+    apply_confusion_matrix_correction,
+    _get_cavity_mode,
+    _get_pair,
+    _get_transition_rf,
+    _resolve_sb_op,
+    _ef_if_at_fock,
+    _ge_if_at_fock,
+    _fock_prep_qua,
+)
 from quam_config import Quam
-from qualibration_libs.parameters import get_qubits
+from qualibration_libs.parameters import get_qubits, get_idle_times_in_clock_cycles
 from qualibration_libs.runtime import simulate_and_plot
 from qualibration_libs.data import XarrayDataFetcher
 from calibration_utils.chi_ramsey_stark import (
+    FockChiFit,
     Parameters,
-    RamseyStarkFit,
     process_raw_dataset,
     fit_raw_data,
     log_fitted_results,
@@ -31,48 +41,45 @@ logger = logging.getLogger(__name__)
 
 # %% {Description}
 description = """
-        RAMSEY STARK-SHIFT — CAVITY-TRANSMON χ CALIBRATION (25)
+        CHI CALIBRATION — FOCK |1> QUBIT RAMSEY (25)
 
 Measures the dispersive shift χ between a transmon qubit and a storage cavity
-mode using Ramsey interferometry under a continuous-wave (CW) cavity drive.
+mode by preparing exactly one photon (Fock |1>) in the cavity and performing
+a qubit Ramsey experiment.
 
 Physics
 -------
-In the dispersive regime:
+In the dispersive regime the qubit frequency shifts by χ per cavity photon:
 
-    H/ħ = ω_r a†a  +  (ω_q/2) σ_z  +  χ a†a σ_z
+    f_qubit(n=1) = f_qubit(n=0) + χ
 
-The qubit frequency shifts by
+Driving the qubit at its bare ge frequency with an artificial detuning δ, the
+Ramsey oscillation frequency is:
 
-    Δω_q = 2χ n̄_ss
+    f_osc = δ + χ
 
-when the cavity is populated with a steady-state photon number n̄_ss ∝ A²,
-where A is the (dimensionless) cavity drive amplitude.
+so χ is extracted directly:
 
-Experiment sequence
--------------------
-For each (A, τ) pair:
+    χ = f_osc − δ
 
+Experiment sequence (per Ramsey delay τ)
+-----------------------------------------
   1. Reset cavity (thermal or active sideband) and qubit.
-  2. Apply CW cavity drive at amplitude A for a fixed duration
-       T_total = ring_up_ns + max_delay_ns + 2 × t_x90 + buffer
-     The cavity reaches steady state n̄_ss ∝ A² after ring_up_ns.
-  3. Wait ring_up_ns on the qubit channel (cavity still being driven).
-  4. Ramsey with artificial detuning:
-       x90  –  wait τ  –  x90
-     The qubit oscillates at f_R(A) = f_artificial + 2χ n̄_ss(A).
-  5. Measure qubit state.
+  2. Prepare Fock |1> (method selected by fock1_prep_method):
+       'sideband'          — ge pi -> ef pi -> f0g1 pi  ->  |g,1>
+       'snap_displacement' — D(alpha1) -> SNAP0 -> D(alpha2)  ->  ~|1>
+  3. Qubit Ramsey at bare ge frequency (no frequency update):
+       x90  —  wait τ  —  frame_rotation(δ × τ)  —  x90
+  4. Measure qubit state.
 
 Analysis
 --------
-  • For each amplitude A, fit f_R(A) from the Ramsey oscillation.
-  • Δf(A) = f_R(A) − f_R(0).
-  • Fit Δf vs A²  →  slope = chi · (dn̄_ss/dA²).
-  • If displacement_k is calibrated: chi = slope / displacement_k.
+  • Fit decaying cosine to P(|e>) vs τ  →  f_osc, T2*.
+  • χ = f_osc − artificial_detuning_hz.
 
 State updates
 -------------
-  • cavity_transmon_pairs[key].chi     [Hz]
+  • cavity_transmon_pairs[key].chi  [Hz]
 """
 
 node = QualibrationNode[Parameters, Quam](
@@ -85,99 +92,88 @@ node = QualibrationNode[Parameters, Quam](
 @node.run_action(skip_if=node.modes.external)
 def custom_param(node: QualibrationNode[Parameters, Quam]):
     # node.parameters.mode_name = "alice"
-    # node.parameters.cavity_amplitudes = [0.0, 0.05, 0.1, 0.15, 0.2, 0.25]
-    # node.parameters.max_delay_ns = 3000
-    # node.parameters.ring_up_ns = 2000
+    # node.parameters.fock1_prep_method = "sideband"
+    # node.parameters.artificial_detuning_hz = 200_000
+    # node.parameters.max_wait_time_in_ns = 5000
     pass
 
 
 node.machine = Quam.load()
 
 
-def _get_cavity_mode(node):
-    mode_name = node.parameters.mode_name
-    for cav in node.machine.cavities.values():
-        mode = getattr(cav, mode_name, None)
-        if mode is not None:
-            return mode
-    raise KeyError(f"Cavity mode '{mode_name}' not found in machine.cavities")
-
-
 # %% {Create_QUA_program}
 @node.run_action(skip_if=node.parameters.load_data_id is not None)
 def create_qua_program(node: QualibrationNode[Parameters, Quam]):
-    """Build the QUA program for the Ramsey Stark chi measurement."""
     u = unit(coerce_to_integer=True)
     node.namespace["qubits"] = qubits = get_qubits(node)
     num_qubits = len(qubits)
+
     n_avg = node.parameters.num_shots
+    idle_times = get_idle_times_in_clock_cycles(node.parameters)  # clock cycles (4 ns each)
 
     cavity_mode = _get_cavity_mode(node)
-    node.namespace["cavity_mode"] = cavity_mode
+    pair = _get_pair(node)
+    prep_method = node.parameters.fock1_prep_method
 
-    # Resolve sideband_drive for optional active cavity cooling
-    mode_name = node.parameters.mode_name
+    # Resolve sideband_drive and chi_hz from QuAM CavityTransmonPair
     sideband_drive = None
-    pairs = getattr(node.machine, "cavity_transmon_pairs", {})
-    for pair_key, pair in pairs.items():
-        if pair_key.endswith(f"_{mode_name}") and getattr(pair, "sideband_drive", None) is not None:
-            sideband_drive = pair.sideband_drive
-            break
+    chi_hz = 0.0
+    if pair is not None:
+        sideband_drive = getattr(pair, "sideband_drive", None)
+        chi_hz = float(pair.chi) if getattr(pair, "chi", None) is not None else 0.0
+    if prep_method == "sideband" and sideband_drive is None:
+        raise ValueError(
+            "No sideband_drive found in the CavityTransmonPair. "
+            "Run the f0g1 sideband calibration nodes first, or set "
+            "fock1_prep_method='snap_displacement'."
+        )
     node.namespace["sideband_drive"] = sideband_drive
 
-    # ── Sweep arrays ──────────────────────────────────────────────────────────
-    min_delay_ns  = node.parameters.min_delay_ns
-    max_delay_ns  = node.parameters.max_delay_ns
-    delay_step_ns = node.parameters.delay_step_ns
-    ring_up_ns    = node.parameters.ring_up_ns
-    art_det_hz    = node.parameters.artificial_detuning_hz
-    amps          = np.array(node.parameters.cavity_amplitudes, dtype=float)
+    # SNAP+displacement: resolve amplitude scales
+    _AMP_MAX = 2.0 - 2**-16
+    if prep_method == "snap_displacement":
+        alpha_max = float(getattr(pair, "displacement_alpha_max", 1.0)) if pair is not None else 1.0
+        amp_scale1 = node.parameters.fock1_alpha1 / alpha_max
+        amp_scale2 = node.parameters.fock1_alpha2 / alpha_max
+        for s, name in [(amp_scale1, "fock1_alpha1"), (amp_scale2, "fock1_alpha2")]:
+            if abs(s) > _AMP_MAX:
+                raise ValueError(
+                    f"{name}={getattr(node.parameters, name)} / alpha_max={alpha_max} = "
+                    f"{s:.4f} exceeds the QUA hardware limit ±{_AMP_MAX:.6f}."
+                )
+        node.namespace["amp_scale1"] = amp_scale1
+        node.namespace["amp_scale2"] = amp_scale2
+        node.log(
+            f"Chi Ramsey: SNAP+displacement Fock|1> prep, "
+            f"detuning={node.parameters.artificial_detuning_hz:.0f} Hz"
+        )
+    else:
+        node.log(
+            f"Chi Ramsey: sideband Fock|1> prep, "
+            f"detuning={node.parameters.artificial_detuning_hz:.0f} Hz"
+        )
 
-    # Ramsey delay array (ns, then clock cycles, minimum 4 clk = 16 ns)
-    tau_ns  = np.arange(min_delay_ns, max_delay_ns + delay_step_ns, delay_step_ns)
-    tau_clk = np.maximum((tau_ns // 4).astype(int), 4)
-    tau_ns_actual = (tau_clk * 4).astype(int)
-
-    n_amp = len(amps)
-    n_tau = len(tau_clk)
-
-    # x90 pulse length (for cavity drive total-duration calculation)
-    first_qubit = next(iter(qubits))
-    x90_ns = int(first_qubit.xy.operations["x90"].length)  # in ns
-
-    # Cavity CW drive duration: covers ring-up + max Ramsey delay + 2×x90 + 200 ns buffer.
-    # This is FIXED regardless of the actual τ in each iteration, so the cavity is
-    # always still being driven during the Ramsey wait.
-    cavity_total_ns  = ring_up_ns + int(tau_ns_actual[-1]) + 2 * x90_ns + 200
-    cavity_total_clk = cavity_total_ns // 4
-    ring_up_clk      = ring_up_ns // 4
-
-    node.namespace["tau_ns"]           = tau_ns_actual
-    node.namespace["amps"]             = amps
-    node.namespace["cavity_total_clk"] = cavity_total_clk
+    # Phase increment per clock cycle for the Ramsey frame rotation:
+    # detuning_hz * 1e-9 * 4 ns/cc = turns per clock cycle
+    detuning_turns_per_cc = node.parameters.artificial_detuning_hz * 1e-9 * 4
 
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
-        "drive_amplitude": xr.DataArray(
-            amps,
-            attrs={"long_name": "cavity drive amplitude", "units": ""},
-        ),
-        "delay": xr.DataArray(
-            tau_ns_actual,
-            attrs={"long_name": "Ramsey delay", "units": "ns"},
+        "idle_time": xr.DataArray(
+            4 * idle_times, attrs={"long_name": "idle time", "units": "ns"}
         ),
     }
 
     with program() as node.namespace["qua_program"]:
-        n        = declare(int)
-        n_st     = declare_stream()
-        drive_amp = declare(fixed)
-        tau_clk_v = declare(int)
+        n = declare(int)
+        t = declare(int)
+        phase = declare(fixed)
+        n_st = declare_stream()
 
         I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
         if node.parameters.use_state_discrimination:
-            state    = [declare(int)         for _ in range(num_qubits)]
-            state_st = [declare_stream()     for _ in range(num_qubits)]
+            state = [declare(int) for _ in range(num_qubits)]
+            state_st = [declare_stream() for _ in range(num_qubits)]
 
         for multiplexed_qubits in qubits.batch():
             for qubit in multiplexed_qubits.values():
@@ -186,97 +182,83 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
 
-                # Outer sweep: cavity drive amplitude
-                # for_each_ is used instead of from_array because the amplitude
-                # list may not satisfy from_array's even-spacing requirement.
-                with for_each_(drive_amp, amps.tolist()):
+                with for_each_(t, idle_times):
+                    for i, qubit in multiplexed_qubits.items():
+                        qubit_IF = int(qubit.xy.intermediate_frequency)
 
-                    # Inner sweep: Ramsey delay
-                    with for_each_(tau_clk_v, tau_clk.tolist()):
-
-                        # ── Reset cavity and qubit ────────────────────────────
-                        sd = node.namespace["sideband_drive"]
-                        for i, qubit in multiplexed_qubits.items():
-                            cavity_mode.reset(
-                                node.parameters.cavity_reset_type,
-                                node.parameters.simulate,
-                                log_callable=node.log,
-                                sideband_drive=sd,
-                                qubit_thermalization_time=qubit.thermalization_time,
-                                fock_n=node.parameters.cavity_active_cooling_fock_n,
-                                f0g1_pulse_duration_ns=node.parameters.f0g1_pulse_duration_ns,
-                            )
-                            qubit.reset(
-                                node.parameters.reset_type,
-                                node.parameters.simulate,
-                                log_callable=node.log,
-                            )
-
-                        # ── Start CW cavity drive (fixed total duration) ──────
-                        # align() ensures cavity_mode_drive and qubit channels
-                        # start from the same time point.
-                        align()
-                        cavity_mode.cavity_mode_drive.play(
-                            "displacement",
-                            amplitude_scale=drive_amp,
-                            duration=cavity_total_clk,
+                        # -- 1. Reset cavity and qubit -------------------------
+                        cavity_mode.reset(
+                            node.parameters.cavity_reset_type,
+                            node.parameters.simulate,
+                            log_callable=node.log,
+                            sideband_drive=sideband_drive,
+                            qubit_thermalization_time=qubit.thermalization_time,
+                            fock_n=node.parameters.cavity_active_cooling_fock_n,
+                            sideband_pulse_duration_ns=node.parameters.sideband_pulse_duration_ns,
+                            chi_hz=chi_hz,
+                            pair=pair,
                         )
+                        qubit.xy.wait(qubit.thermalization_time // 4)
 
-                        # ── Wait for cavity ring-up on qubit channels ─────────
-                        # After ring_up_clk the cavity has reached steady state.
-                        for i, qubit in multiplexed_qubits.items():
-                            wait(ring_up_clk, qubit.xy.name)
+                        if prep_method == "sideband":
+                            # -- 2a. Fock |1> prep via sideband ladder ---------
+                            # ge pi -> ef pi -> f0g1 pi  ->  |g,1>
+                            align(qubit.xy.name, sideband_drive.name, qubit.resonator.name)
+                            _fock_prep_qua(1, pair, qubit, sideband_drive)
 
-                        # ── Ramsey sequence with detuning ─────────────────────
-                        # Shift IF by +art_det_hz so the Ramsey oscillation is
-                        # visible at A=0.  The additional 2χ n̄_ss shift is what
-                        # we extract from the amplitude dependence.
-                        for i, qubit in multiplexed_qubits.items():
-                            update_frequency(
-                                qubit.xy.name,
-                                int(qubit.xy.intermediate_frequency) + art_det_hz,
+                        else:  # snap_displacement
+                            # -- 2b. Fock |1> prep: D(alpha1) -> SNAP0 -> D(alpha2)
+                            align(qubit.xy.name, cavity_mode.cavity_mode_drive.name, qubit.resonator.name)
+                            cavity_mode.cavity_mode_drive.play(
+                                "displacement", amplitude_scale=node.namespace["amp_scale1"]
+                            )
+                            align(qubit.xy.name, cavity_mode.cavity_mode_drive.name)
+                            qubit.xy.update_frequency(qubit_IF)
+                            qubit.xy.play("selective_x180")  # SNAP0: two selective pi pulses
+                            qubit.xy.play("selective_x180")  # apply pi phase to |n=0> component
+                            align(qubit.xy.name, cavity_mode.cavity_mode_drive.name)
+                            cavity_mode.cavity_mode_drive.play(
+                                "displacement", amplitude_scale=node.namespace["amp_scale2"]
                             )
 
-                        # align()
-                        for i, qubit in multiplexed_qubits.items():
-                            qubit.xy.play("x90")
-                        for i, qubit in multiplexed_qubits.items():
-                            wait(tau_clk_v, qubit.xy.name)
-                        for i, qubit in multiplexed_qubits.items():
-                            qubit.xy.play("x90")
+                        # -- 3. Qubit Ramsey at bare ge frequency --------------
+                        # Drive at qubit_IF (no update_frequency).
+                        # The cavity photon shifts the qubit by chi, so the
+                        # Ramsey oscillates at artificial_detuning + chi.
+                        pi_op = node.parameters.ramsey_pi_pulse_op
+                        align(qubit.xy.name, qubit.resonator.name)
+                        qubit.xy.update_frequency(qubit_IF)
+                        assign(phase, Cast.mul_fixed_by_int(detuning_turns_per_cc, t))
+                        reset_frame(qubit.xy.name)
+                        with strict_timing_():
+                            qubit.xy.play(pi_op, amplitude_scale=0.5)   # pi/2 opening arm
+                            qubit.xy.wait(t)                             # Ramsey wait
+                            frame_rotation_2pi(phase, qubit.xy.name)
+                            qubit.xy.play(pi_op, amplitude_scale=0.5)   # pi/2 closing arm
+                        reset_frame(qubit.xy.name)
 
-                        # Restore qubit IF immediately after Ramsey
-                        for i, qubit in multiplexed_qubits.items():
-                            update_frequency(
-                                qubit.xy.name,
-                                int(qubit.xy.intermediate_frequency),
+                        # -- 4. Measure ----------------------------------------
+                        align(qubit.xy.name, qubit.resonator.name)
+                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                        save(I[i], I_st[i])
+                        save(Q[i], Q_st[i])
+                        if node.parameters.use_state_discrimination:
+                            assign(
+                                state[i],
+                                Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold),
                             )
+                            save(state[i], state_st[i])
+                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
-                        # ── Measure ───────────────────────────────────────────
-                        for i, qubit in multiplexed_qubits.items():
-                            align(qubit.xy.name, qubit.resonator.name)
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
-                            if node.parameters.use_state_discrimination:
-                                assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                                save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
-
-                        align()
-                        # ── Wait for cavity CW drive to finish ───────────────
-                        # align() prevents the next-shot reset from starting
-                        # before the cavity drive pulse has fully completed.
-                        align()
+                    align()
 
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
-                # Buffer order must match loop order: inner=tau, outer=amplitude
-                I_st[i].buffer(n_tau).buffer(n_amp).average().save(f"I{i + 1}")
-                Q_st[i].buffer(n_tau).buffer(n_amp).average().save(f"Q{i + 1}")
+                I_st[i].buffer(len(idle_times)).average().save(f"I{i + 1}")
+                Q_st[i].buffer(len(idle_times)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
-                    state_st[i].buffer(n_tau).buffer(n_amp).average().save(f"state{i + 1}")
+                    state_st[i].buffer(len(idle_times)).average().save(f"state{i + 1}")
 
 
 # %% {Simulate}
@@ -314,19 +296,23 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
     node.results["ds_raw"] = dataset
 
 
-# %% {Load_historical_data}
+# %% {Load_data}
 @node.run_action(skip_if=node.parameters.load_data_id is None)
 def load_data(node: QualibrationNode[Parameters, Quam]):
     load_data_id = node.parameters.load_data_id
     node.load_from_id(node.parameters.load_data_id)
     node.parameters.load_data_id = load_data_id
-    node.namespace["qubits"]      = get_qubits(node)
+    node.namespace["qubits"] = get_qubits(node)
     node.namespace["cavity_mode"] = _get_cavity_mode(node)
 
 
 # %% {Analyse_data}
 @node.run_action(skip_if=node.parameters.simulate)
 def analyse_data(node: QualibrationNode[Parameters, Quam]):
+    if node.parameters.use_state_discrimination and node.parameters.use_confusion_matrix_correction:
+        node.results["ds_raw"] = apply_confusion_matrix_correction(
+            node.results["ds_raw"], node.namespace["qubits"]
+        )
     node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
     node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}
@@ -341,7 +327,7 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
 @node.run_action(skip_if=node.parameters.simulate)
 def plot_data(node: QualibrationNode[Parameters, Quam]):
     fit_results = {
-        k: RamseyStarkFit(**v) for k, v in node.results["fit_results"].items()
+        k: FockChiFit(**v) for k, v in node.results["fit_results"].items()
     }
     fig = plot_ramsey_stark(
         node.results["ds_raw"],
@@ -356,16 +342,16 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
 # %% {Update_state}
 @node.run_action(skip_if=node.parameters.simulate)
 def update_state(node: QualibrationNode[Parameters, Quam]):
-    """Write χ to the corresponding CavityTransmonPair."""
-    mode_name   = node.parameters.mode_name
+    """Write chi to the corresponding CavityTransmonPair."""
+    mode_name = node.parameters.mode_name
     fit_results = {
-        k: RamseyStarkFit(**v) for k, v in node.results["fit_results"].items()
+        k: FockChiFit(**v) for k, v in node.results["fit_results"].items()
     }
 
     with node.record_state_updates():
         for qubit in node.namespace["qubits"]:
             res = fit_results.get(qubit.name)
-            if res is None or not res.success or res.chi_hz is None:
+            if res is None or not res.success or not np.isfinite(res.chi_hz):
                 continue
 
             chi_hz = float(res.chi_hz)
