@@ -83,9 +83,9 @@ def fit_raw_data(
         decay_var = float(fit_q.sel(fit_vals="decay_decay").item())
 
         if np.isfinite(decay) and decay < 0:
-            T1_ns = -1.0 / decay * 1e9  # decay is in 1/s from fit_decay_exp
+            T1_ns = -1.0 / decay  # decay is in 1/ns (idle_time axis is in ns)
             T1_error_ns = T1_ns * (np.sqrt(max(decay_var, 0.0)) / abs(decay))
-            success = T1_ns > 16.0 and (T1_error_ns / T1_ns) < 1.0
+            success = bool(T1_ns > 16.0 and (T1_error_ns / T1_ns) < 1.0)
         else:
             T1_ns = float("nan")
             T1_error_ns = float("nan")

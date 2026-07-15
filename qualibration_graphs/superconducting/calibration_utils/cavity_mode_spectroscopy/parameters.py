@@ -45,6 +45,10 @@ class NodeSpecificParameters(RunnableParameters):
     """Override the cavity thermalization wait time [ns]. When set, this value is used
     instead of cavity_mode.T1 × cavity_mode.thermalization_time_factor.
     Useful when T1 is very long (e.g. SRF cavities) and you want a shorter practical wait."""
+    use_gaussian_fit: bool = False
+    """If True, fit the cavity resonance dip with a Gaussian instead of the default Lorentzian.
+    The Gaussian fit is appropriate when the linewidth is dominated by the probe pulse bandwidth
+    rather than the cavity decay rate. The extracted center frequency and FWHM are used identically."""
 
 
 class Parameters(

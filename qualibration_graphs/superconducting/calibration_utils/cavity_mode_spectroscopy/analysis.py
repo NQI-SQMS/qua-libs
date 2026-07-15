@@ -40,6 +40,13 @@ class FitParameters:
     center_detuning_hz: float
     """Detuning offset from the current RF_frequency [Hz]."""
     success: bool
+    # Gaussian-fit extras — NaN when Lorentzian path was used
+    gaussian_amplitude: float = float("nan")
+    """Amplitude of the Gaussian fitted to the negated signal (> 0)."""
+    gaussian_sigma_hz: float = float("nan")
+    """Gaussian sigma [Hz]; FWHM = 2*sqrt(2*ln2)*sigma ≈ 2.355*sigma."""
+    gaussian_offset_neg: float = float("nan")
+    """Baseline of the Gaussian fitted to the negated signal."""
 
 
 def log_fitted_results(fit_results: Dict, log_callable=None):
@@ -140,6 +147,55 @@ def _lorentzian_dip(x, amplitude, center, hwhm, offset):
     return offset - amplitude * hwhm ** 2 / (hwhm ** 2 + (x - center) ** 2)
 
 
+def _fit_gaussian_dip(x: np.ndarray, y: np.ndarray):
+    """Fit a Gaussian dip to (x, y).
+
+    Internally negates *y* so that the dip becomes a peak and fits:
+        y_neg = offset + amplitude * exp(-0.5 * ((x - center) / sigma)^2)
+    with amplitude > 0.
+
+    Returns (center, fwhm, amplitude_of_neg, sigma, offset_of_neg, success).
+    To reconstruct the curve over the *original* signal:
+        y_fit = -(offset_of_neg + amplitude_of_neg * gauss(x))
+    """
+    x = np.asarray(x, float)
+    y_neg = -np.asarray(y, float)
+
+    offset0 = float(np.percentile(y_neg, 10))
+    i_max = int(np.argmax(y_neg))
+    center0 = float(x[i_max])
+    amplitude0 = max(float(np.max(y_neg)) - offset0, 1e-12)
+
+    half_height = offset0 + 0.5 * amplitude0
+    above = y_neg > half_height
+    dx = abs(x[1] - x[0]) if len(x) > 1 else float(abs(x[-1] - x[0]))
+    if np.count_nonzero(above) >= 2:
+        idx = np.where(above)[0]
+        left = float(x[max(idx[0] - 1, 0)])
+        right = float(x[min(idx[-1] + 1, len(x) - 1)])
+        sigma0 = max((right - left) / (2.0 * np.sqrt(2.0 * np.log(2.0))), dx)
+    else:
+        sigma0 = max(float((x[-1] - x[0]) / 6.0), dx)
+
+    def _gauss(xi, amplitude, center, sigma, offset):
+        return offset + amplitude * np.exp(-0.5 * ((xi - center) / sigma) ** 2)
+
+    try:
+        popt, _ = curve_fit(
+            _gauss, x, y_neg,
+            p0=[amplitude0, center0, sigma0, offset0],
+            bounds=([0, x[0] - abs(x[-1] - x[0]), 0, -np.inf],
+                    [np.inf, x[-1] + abs(x[-1] - x[0]), np.inf, np.inf]),
+            maxfev=5000,
+        )
+        amplitude, center, sigma, offset = popt
+        fwhm = 2.0 * np.sqrt(2.0 * np.log(2.0)) * float(sigma)
+        return float(center), float(fwhm), float(amplitude), float(sigma), float(offset), True
+    except Exception:
+        fwhm0 = 2.0 * np.sqrt(2.0 * np.log(2.0)) * sigma0
+        return center0, fwhm0, amplitude0, sigma0, offset0, False
+
+
 def _fit_lorentzian_dip(x: np.ndarray, y: np.ndarray):
     """Fit a Lorentzian dip; returns (center, fwhm, success)."""
     x = np.asarray(x, dtype=float)
@@ -184,11 +240,19 @@ def _get_cavity_mode(node: QualibrationNode):
 def fit_raw_data(
     ds: xr.Dataset, node: QualibrationNode
 ) -> Tuple[xr.Dataset, Dict[str, FitParameters]]:
-    """Fit the cavity resonance dip for each qubit."""
+    """Fit the cavity resonance dip for each qubit.
+
+    When node.parameters.use_gaussian_fit is True a Gaussian dip is fitted
+    instead of the default Lorentzian.  The Gaussian is appropriate when the
+    observed linewidth is dominated by the probe-pulse bandwidth.  The Gaussian
+    parameters (amplitude, sigma, offset_neg) are stored in FitParameters so
+    the plotting module can draw the fitted curve.
+    """
     cavity_mode = _get_cavity_mode(node)
     rf_freq = cavity_mode.cavity_mode_drive.RF_frequency
     span_hz = node.parameters.frequency_span_in_mhz * 1e6
     min_dip = node.parameters.min_dip_fraction
+    use_gaussian = getattr(node.parameters, "use_gaussian_fit", False)
 
     signal_name = "state" if node.parameters.use_state_discrimination else "I"
 
@@ -198,7 +262,7 @@ def fit_raw_data(
         x = ds_q.detuning.values.astype(float)
         y = getattr(ds_q, signal_name).values.astype(float)
 
-        # Validate dip depth
+        # Validate dip depth before attempting any fit
         dip_depth = float(np.max(y) - np.min(y))
         signal_range = max(float(np.max(y)), 1e-12)
         if dip_depth < min_dip * signal_range:
@@ -210,7 +274,11 @@ def fit_raw_data(
             )
             continue
 
-        center_det, fwhm, ok = _fit_lorentzian_dip(x, y)
+        if use_gaussian:
+            center_det, fwhm, g_amp, g_sigma, g_offset_neg, ok = _fit_gaussian_dip(x, y)
+        else:
+            center_det, fwhm, ok = _fit_lorentzian_dip(x, y)
+            g_amp = g_sigma = g_offset_neg = float("nan")
 
         in_range = abs(center_det) < span_hz
         success = ok and np.isfinite(center_det) and in_range
@@ -220,6 +288,9 @@ def fit_raw_data(
             fwhm_hz=fwhm,
             center_detuning_hz=center_det if success else 0.0,
             success=success,
+            gaussian_amplitude=g_amp,
+            gaussian_sigma_hz=g_sigma,
+            gaussian_offset_neg=g_offset_neg,
         )
 
     return ds, fit_results

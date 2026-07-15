@@ -43,6 +43,13 @@ def _plot_single(ax, ds_q, fit, fit_params=None):
 
     ax.plot(x_ns * 1e-3, y, ".", ms=4, color="C0", label="data")
 
+    # Lock y-limits to the data range before adding the fit, so the fit
+    # curve cannot push the axis beyond what the data shows.
+    y_finite = y[np.isfinite(y)]
+    if y_finite.size > 0:
+        y_margin = max((y_finite.max() - y_finite.min()) * 0.1, 0.05)
+        ax.set_ylim(y_finite.min() - y_margin, y_finite.max() + y_margin)
+
     if fit is not None:
         a     = float(fit.fit.sel(fit_vals="a").item())
         off   = float(fit.fit.sel(fit_vals="offset").item())
@@ -51,7 +58,7 @@ def _plot_single(ax, ds_q, fit, fit_params=None):
         if np.isfinite(decay) and decay < 0:
             x_dense = np.linspace(x_ns.min(), x_ns.max(), 500)
             y_fit = decay_exp(x_dense, a, off, decay)
-            if "I" in ds_q.data_vars:
+            if "state" not in ds_q.data_vars and "I" in ds_q.data_vars:
                 y_fit = y_fit * 1e3
             ax.plot(x_dense * 1e-3, y_fit, "-", lw=1.5, color="C1", label="fit")
 
@@ -64,7 +71,9 @@ def _plot_single(ax, ds_q, fit, fit_params=None):
         ax.set_title(f"T1 = {T1_str} µs  [{status}]", fontsize=9,
                      color="green" if success else "red")
         if np.isfinite(T1_us):
-            ax.axvline(T1_us, color="C2", ls="--", lw=1, label=f"T1={T1_us:.1f} µs")
+            ax.text(0.97, 0.97, f"T1 = {T1_str} µs",
+                    transform=ax.transAxes, ha="right", va="top",
+                    fontsize=8, color="green" if success else "red")
 
     ax.set_xlabel("Idle time (µs)")
     ax.set_ylabel(ylabel)

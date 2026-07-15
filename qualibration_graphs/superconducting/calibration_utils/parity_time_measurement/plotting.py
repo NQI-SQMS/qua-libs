@@ -69,6 +69,12 @@ def plot_parity_time(
 
         if res is not None and res.success:
             tau_parity_us = res.parity_time_s * 1e6
+
+            # Fit curve (damped cosine) or FFT fallback label
+            if res.fit_curve is not None and len(res.fit_curve) == len(tau_us):
+                ax_trace.plot(tau_us, res.fit_curve, "-", color="tomato",
+                              lw=1.5, label="Damped cosine fit")
+
             ax_trace.axvline(tau_parity_us, color="forestgreen", lw=1.5, ls="--",
                              label=f"τ_parity = {tau_parity_us * 1e3:.0f} ns")
             for k in range(2, 10):
@@ -77,9 +83,17 @@ def plot_parity_time(
                     ax_trace.axvline(t_k, color="forestgreen", lw=0.6,
                                      ls=":", alpha=0.5)
 
+            method = "FFT" if res.used_fft_fallback else "fit"
+            err_str = (
+                f" ± {res.chi_eff_err_hz / 1e3:.2f}" if not np.isnan(res.chi_eff_err_hz) else ""
+            )
+            T2_str = (
+                f"\nT₂ = {res.T2_s * 1e6:.1f} µs" if not np.isnan(res.T2_s) else ""
+            )
             ann = (
-                f"χ_eff/(2π) = {res.chi_eff_hz / 1e3:.1f} kHz\n"
+                f"χ_eff/(2π) = {res.chi_eff_hz / 1e3:.2f}{err_str} kHz  [{method}]\n"
                 f"τ_parity   = {res.parity_time_s * 1e9:.0f} ns"
+                f"{T2_str}"
             )
             ax_trace.text(
                 0.97, 0.97, ann,
@@ -98,7 +112,7 @@ def plot_parity_time(
         ax_trace.set_ylabel("I (V)" if using_iq else "P(|e⟩)")
         ax_trace.set_title(
             f"{qubit.name} · {mode_name}: Parity-time Ramsey\n"
-            f"(selective_y90 → wait(τ) → selective_y90, cavity displaced)"
+            f"(Fock |1⟩ via sideband → x90 → wait(τ) → x90)"
         )
         ax_trace.legend(fontsize=9, loc="lower right")
         if not using_iq:
