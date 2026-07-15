@@ -1,4 +1,4 @@
-﻿from typing import Literal, Optional
+from typing import Literal, Optional
 
 from qualibrate import NodeParameters
 from qualibrate.core.parameters import RunnableParameters
@@ -18,21 +18,21 @@ class NodeSpecificParameters(RunnableParameters):
     max_delay_ns: int = 4000
     """Maximum Ramsey wait time [ns].
     Should cover at least two full oscillation periods: max_delay_ns > 2/χ_eff.
-    For χ/(2π) â‰ˆ 600 kHz this is ~3 Âµs; for smaller χ increase accordingly."""
+    For χ/(2π) ≈ 600 kHz this is ~3 µs; for smaller χ increase accordingly."""
 
     delay_step_ns: int = 16
     """Step size between wait times [ns]. Must be a multiple of 4."""
 
     displacement_scale: float = 0.5
     """Cavity displacement amplitude_scale used during the measurement.
-    Should deposit ~0.5â€“2 photons on average.  If displacement_k is calibrated,
-    nÌ„ = displacement_k × displacement_scaleÂ².
+    Should deposit ~0.5–2 photons on average.  If displacement_k is calibrated,
+    nÌ" = displacement_k × displacement_scale².
     Keep below 0.5 (OPX amplitude limit)."""
 
     cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
     """How to reset the cavity between shots.
-    'thermal'         â€” passive decay (thermalization_time × T1).
-    'active_sideband' â€” f0g1 π-pulse active cooling."""
+    'thermal'         — passive decay (thermalization_time × T1).
+    'active_sideband' — f0g1 π-pulse active cooling."""
 
     cavity_active_cooling_fock_n: int = 1
     """Starting Fock level for active sideband cooling

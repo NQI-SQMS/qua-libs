@@ -1,4 +1,4 @@
-﻿# %% {Imports}
+# %% {Imports}
 import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
@@ -28,7 +28,7 @@ from qualibration_libs.data import XarrayDataFetcher
 
 # %% {Description}
 description = """
-        PHOTON NUMBER RESOLVED SPECTROSCOPY â€” CHI MEASUREMENT (29)
+        PHOTON NUMBER RESOLVED SPECTROSCOPY — CHI MEASUREMENT (29)
 
 Displaces the selected cavity mode to a coherent state |α⟩ and sweeps the
 qubit ge spectroscopy frequency.  The resulting spectrum shows photon-number-
@@ -37,7 +37,7 @@ split peaks:
     f_n = f_q + chi*n   (n=0, 1, 2, ...)
 
 separated by |chi|.  The node auto-detects the number of peaks (1 → max_peaks)
-by fitting successive multi-Gaussian models until the reduced chiÂ² drops below
+by fitting successive multi-Gaussian models until the reduced chi² drops below
 the threshold.  chi = -(mean PNRS peak spacing) is saved to the machine state.
 
 Convention: chi [Hz] is the full per-photon qubit frequency shift (negative for

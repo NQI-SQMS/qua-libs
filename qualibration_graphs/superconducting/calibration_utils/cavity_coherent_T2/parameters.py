@@ -1,4 +1,4 @@
-﻿from typing import Literal, Optional
+from typing import Literal, Optional
 
 from qualibrate import NodeParameters
 from qualibrate.core.parameters import RunnableParameters
@@ -18,8 +18,8 @@ class NodeSpecificParameters(RunnableParameters):
 
     cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
     """How to reset the cavity before each displacement.
-    'thermal'         â€” wait thermalization_time_factor × T1 (passive decay).
-    'active_sideband' â€” drive f0g1 π-pulses to actively remove photons; requires a
+    'thermal'         — wait thermalization_time_factor × T1 (passive decay).
+    'active_sideband' — drive f0g1 π-pulses to actively remove photons; requires a
                         calibrated f0g1_pi operation on the sideband_drive of the
                         corresponding CavityTransmonPair."""
 

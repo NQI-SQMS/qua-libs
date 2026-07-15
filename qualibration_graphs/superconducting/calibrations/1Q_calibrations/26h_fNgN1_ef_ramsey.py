@@ -41,9 +41,9 @@ state |fock_level⟩.  The fitted oscillation frequency reveals the residual det
 the ef drive from the true ef resonance at this Fock level.  This captures the Kerr
 nonlinearity that the chi-linear approximation misses at higher photon numbers.
 
-Both signs of the artificial detuning Â±Î´ are swept so the frequency correction is
+Both signs of the artificial detuning ±δ are swept so the frequency correction is
 unambiguous:
-    f_obsÂ±  =  |f_drive - f_ef_focka Â± Î´|
+    f_obs±  =  |f_drive - f_ef_focka ± δ|
     correction  =  (f_obs+ - f_obs-) / 2   →   ef_delta_f_focka -= correction
 
 Sequence:
@@ -52,7 +52,7 @@ Sequence:
        π_ge → π_ef → sideband_pi(f{j}g{j+1}) → cavity |j+1⟩, qubit |g⟩.
   2. π_ge at delta_f_focka-shifted frequency → qubit |e⟩ with cavity |fock_level⟩.
   3. π/2 ef pulse at ef_delta_f_focka-shifted frequency.
-  4. Wait τ + virtual frame rotation (Â±Î´).
+  4. Wait τ + virtual frame rotation (±δ).
   5. π/2 ef pulse.
   6. Refocusing π_ge at chi_focka-shifted frequency: maps |e⟩→|g⟩ off-resonance, leaves |f⟩ untouched on-resonance.
   7. Measure qubit state.

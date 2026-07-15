@@ -64,8 +64,8 @@ Prerequisites:
     - For fock_level > 0: calibrated sideband transitions 0…fock_level-1.
 
 State update:
-    - cavity_transmon_pairs[“{qubit}_{mode}”].chi  (fock_level=0 only)
-    - cavity_transmon_pairs[“{qubit}_{mode}”].transitions[“f{k}g{k+1}”].delta_f_focka
+    - cavity_transmon_pairs["{qubit}_{mode}"].chi  (fock_level=0 only)
+    - cavity_transmon_pairs["{qubit}_{mode}"].transitions["f{k}g{k+1}"].delta_f_focka
       (Ramsey correction subtracted from the spectroscopy estimate)
 """
 

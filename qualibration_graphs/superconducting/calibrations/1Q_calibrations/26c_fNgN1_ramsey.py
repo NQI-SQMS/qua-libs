@@ -39,13 +39,13 @@ description = """
         SIDEBAND RAMSEY - precise frequency calibration for any |n⟩ → |n+1⟩ transition
 
 Performs a Ramsey fringe experiment on the sideband drive to extract the resonance
-frequency of the |f, n⟩ â†" |g, n+1⟩ transition with high precision.
+frequency of the |f, n⟩ ↔ |g, n+1⟩ transition with high precision.
 
-An artificial detuning Î´ is added so that fringes are visible even at zero drive
+An artificial detuning δ is added so that fringes are visible even at zero drive
 detuning.  The fitted oscillation frequency f_obs satisfies:
-    f_obs = |f_drive - f_sideband + Î´|
+    f_obs = |f_drive - f_sideband + δ|
 from which the corrected sideband frequency is:
-    f_sideband = f_drive + Î´ - f_obs  (using the sign that minimises |correction|)
+    f_sideband = f_drive + δ - f_obs  (using the sign that minimises |correction|)
 
 Sequence:
   0. Thermalize cavity and qubit.
@@ -54,7 +54,7 @@ Sequence:
   2. π_ge  →  |e⟩
   3. π_ef  →  |f⟩
   4. π/2 sideband pulse  →  superposition (|f,n⟩ + |g,n+1⟩).
-  5. Wait τ  +  virtual frame rotation (artificial detuning Î´).
+  5. Wait τ  +  virtual frame rotation (artificial detuning δ).
   6. π/2 sideband pulse  →  interference.
   7. π_ef  (back-swap: maps |f⟩ → |e⟩ for readout).
   8. Measure qubit state  →  oscillation vs τ.
@@ -76,7 +76,7 @@ class RamseyFitParameters:
     oscillation_frequency_hz: float
     """Observed Ramsey oscillation frequency [Hz]."""
     frequency_correction_hz: float
-    """Correction to add to the sideband RF frequency [Hz].  freq_correction = Î´ - f_obs."""
+    """Correction to add to the sideband RF frequency [Hz].  freq_correction = δ - f_obs."""
     T2_ramsey_ns: float
     """Fitted T2* of the sideband [ns]."""
     success: bool
@@ -122,7 +122,7 @@ def _fit_ramsey(ds: xr.Dataset, node) -> Tuple[xr.Dataset, Dict[str, RamseyFitPa
     frequency  = fit.sel(fit_vals="f")
     decay      = fit.sel(fit_vals="decay")
     decay_res  = fit.sel(fit_vals="decay_decay")
-    tau        = 1 / decay                            # in nsâ»Â¹ → T2 in ns
+    tau        = 1 / decay                            # in ns⁻¹ → T2 in ns
     tau_error  = tau * (np.sqrt(decay_res) / decay)
 
     detuning_hz = float(node.parameters.artificial_detuning_hz)
@@ -136,7 +136,7 @@ def _fit_ramsey(ds: xr.Dataset, node) -> Tuple[xr.Dataset, Dict[str, RamseyFitPa
         success = bool(~nan_fail.sel(qubit=q).values)
         # freq_offset is Î" in GHz; convert to Hz and negate → correction to ADD to rf
         freq_off_hz = 1e9 * float(freq_offset.sel(qubit=q))
-        T2_ns = 1e9 * float(decay_out.sel(qubit=q))  # decay is in nsâ»Â¹ → T2 in ns
+        T2_ns = 1e9 * float(decay_out.sel(qubit=q))  # decay is in ns⁻¹ → T2 in ns
         f_avg_hz = 1e9 * float(frequency.mean(dim="detuning_signs").sel(qubit=q).values)
         fit_results[q] = RamseyFitParameters(
             oscillation_frequency_hz=f_avg_hz,
@@ -246,7 +246,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     detuning_factor     = float(node.parameters.artificial_detuning_hz) * 1e-9
     detuning_factor_neg = -detuning_factor
 
-    detuning_signs = [-1, 1]  # inner loop; sign=-1 → âˆ'Î´, sign=+1 → +Î´
+    detuning_signs = [-1, 1]  # inner loop; sign=-1 → −δ, sign=+1 → +δ
 
     ge_if_k = _ge_if_at_fock(pair, pair_qubit, k)
     ef_if_k = _ef_if_at_fock(pair, pair_qubit, k)

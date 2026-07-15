@@ -186,7 +186,6 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         if prep_method == "sideband":
                             # Sideband and ef frequencies at Fock |0> (cavity in vacuum)
                             ef_if_0 = _ef_if_at_fock(pair, qubit, 0)
-                            op_0 = _resolve_sb_op(sideband_drive, 0)
                             sb_rf_0 = _get_transition_rf(pair, sideband_drive, 0)
                             target_if_0 = int(sideband_drive.intermediate_frequency) + int(sb_rf_0 - sideband_drive.RF_frequency)
                             tr_0 = pair.transitions.get("f0g1")
@@ -208,16 +207,20 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             # -- 3a. Sideband Ramsey ---------------------------
                             # Opening f0g1 pi, wait tau with frame rotation, closing f0g1 pi.
                             with strict_timing_():
+                                sideband_drive.play("sideband_ramp_up")
                                 if flat_top_clk_0 is not None:
-                                    sideband_drive.play(op_0, duration=flat_top_clk_0)  # opening f0g1 pi
+                                    sideband_drive.play("sideband_square", duration=flat_top_clk_0)
                                 else:
-                                    sideband_drive.play(op_0)
+                                    sideband_drive.play("sideband_square")
+                                sideband_drive.play("sideband_ramp_down")
                                 sideband_drive.wait(t)              # Ramsey wait
                                 frame_rotation_2pi(phase, sideband_drive.name)
+                                sideband_drive.play("sideband_ramp_up")
                                 if flat_top_clk_0 is not None:
-                                    sideband_drive.play(op_0, duration=flat_top_clk_0)  # closing f0g1 pi
+                                    sideband_drive.play("sideband_square", duration=flat_top_clk_0)
                                 else:
-                                    sideband_drive.play(op_0)
+                                    sideband_drive.play("sideband_square")
+                                sideband_drive.play("sideband_ramp_down")
                             reset_frame(sideband_drive.name)
 
                             # -- 4a. Back-conversion: ef pi -> ge pi/2 ---------

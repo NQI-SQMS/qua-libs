@@ -42,20 +42,20 @@ a coherent state |α⟩ and probing the vacuum-state population with a selective
 qubit π-pulse.
 
 Sequence (per wait time t):
-  1. Thermalize cavity (wait â‰¥ 5×T1) and reset qubit.
+  1. Thermalize cavity (wait ≥ 5×T1) and reset qubit.
   2. Apply displacement pulse: amplitude_scale = displacement_alpha / displacement_alpha_max.
   3. Wait for total time t = delay_repeats × t_per_rep.
-  4. Apply selective_x180 on qubit â€” flips qubit only when cavity is in |0⟩.
+  4. Apply selective_x180 on qubit — flips qubit only when cavity is in |0⟩.
   5. Measure qubit state.
 
 The measured signal is:
-    P_e(t) = A Â· exp(-|αâ‚€|Â² Â· exp(-t / T1)) + offset
+    P_e(t) = A · exp(-|α₀|² · exp(-t / T1)) + offset
 
-where |αâ‚€|Â² = displacement_alphaÂ² and T1 is the cavity photon lifetime.
+where |α₀|² = displacement_alpha² and T1 is the cavity photon lifetime.
 
-Fitting extracts T1 and |αâ‚€|Â².  The dataset is augmented with the inferred
-photon-number decay |α(t)|Â² = -ln((P_e - offset) / A), plotted as a simple
-exponential: |αâ‚€|Â² Â· exp(-t / T1).
+Fitting extracts T1 and |α₀|².  The dataset is augmented with the inferred
+photon-number decay |α(t)|² = -ln((P_e - offset) / A), plotted as a simple
+exponential: |α₀|² · exp(-t / T1).
 
 Parameters:
   - mode_name:           Cavity mode to probe ('alice' or 'bob').
@@ -125,7 +125,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         raise ValueError(
             f"displacement_alpha={node.parameters.displacement_alpha} / "
             f"alpha_max={alpha_max} = {amplitude_scale:.4f} exceeds the QUA "
-            f"hardware limit Â±{_AMP_MAX:.6f}.  Reduce displacement_alpha."
+            f"hardware limit ±{_AMP_MAX:.6f}.  Reduce displacement_alpha."
         )
     node.namespace["amplitude_scale"] = amplitude_scale
     node.log(
@@ -185,7 +185,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 with for_each_(t, t_per_rep_clk.tolist()):
 
                     # ============================================================
-                    # PART 1 â€” BASELINE measurement (only when subtract_baseline=True)
+                    # PART 1 — BASELINE measurement (only when subtract_baseline=True)
                     # ============================================================
                     # Purpose: capture the bare readout-resonator IQ response at each
                     # wait time WITHOUT any qubit drive.  The cavity-resonator cross-Kerr
@@ -223,7 +223,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             for i, qubit in multiplexed_qubits.items():
                                 qubit.xy.wait(t)
 
-                        # NO selective π-pulse â€” qubit stays in |g⟩.
+                        # NO selective π-pulse — qubit stays in |g⟩.
                         # Measure baseline IQ (cross-Kerr shift only, no vacuum signal).
                         align()
                         for i, qubit in multiplexed_qubits.items():
@@ -234,7 +234,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         align()
 
                     # ============================================================
-                    # PART 2 â€” SIGNAL measurement (full protocol, WITH π-pulse)
+                    # PART 2 — SIGNAL measurement (full protocol, WITH π-pulse)
                     # ============================================================
                     # --- Reset cavity and qubit BEFORE displacement ---
                     sideband_drive = node.namespace["sideband_drive"]

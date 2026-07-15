@@ -12,7 +12,13 @@ from qualang_tools.results import progress_counter
 from qualang_tools.units import unit
 
 from qualibrate import QualibrationNode
-from calibration_utils.shared import apply_confusion_matrix_correction, _get_cavity_mode
+from calibration_utils.shared import (
+    apply_confusion_matrix_correction,
+    _get_cavity_mode,
+    _get_pair_components,
+    _fock_prep_qua,
+    _ge_if_at_fock,
+)
 from quam_config import Quam
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.runtime import simulate_and_plot
@@ -31,39 +37,36 @@ logger = logging.getLogger(__name__)
 
 # %% {Description}
 description = """
-        PARITY-TIME CALIBRATION â€” WIGNER TOMOGRAPHY (30)
+        PARITY-TIME CALIBRATION — WIGNER TOMOGRAPHY (30)
 
-Experimentally calibrates the dispersive Ramsey wait time τ_parity required
-for Wigner tomography.  τ_parity is the duration for which the qubit
-accumulates phase nπ when the cavity contains n photons:
+Experimentally calibrates the dispersive Ramsey wait time t_parity required
+for Wigner tomography.  t_parity is the duration for which the qubit
+accumulates phase n*pi when the cavity contains n photons:
 
-    χ_eff Â· τ_parity = π   →   τ_parity = 1 / (2 Â· f_χ)
-
-This differs from the analytical estimate 1/(2χ) because:
-  â€¢ The pulsed displacement (same hardware path as the actual Wigner experiment)
-    includes AC Stark shifts not present in the CW chi_ramsey_stark calibration.
-  â€¢ Higher-order dispersive terms (χ') shift the effective coupling.
-  â€¢ Finite π/2 pulse durations contribute additional phase.
+    chi_eff * t_parity = pi   ->   t_parity = 1 / (2 * f_chi)
 
 Experiment sequence
 -------------------
-For each delay τ:
+For each delay tau:
 
   1. Reset cavity and qubit.
-  2. Apply a short displacement pulse (displacement_scale â‰ˆ 0.5, nÌ„ â‰ˆ 1 photon).
-  3. Ramsey:  selective_y90 → wait(τ) → selective_y90
-     (selective_y90 = frame_rotation(+π/2) Â· selective_x180/2 Â· frame_rotation(-π/2))
-  4. Measure qubit state.
+  2. Prepare Fock |1> via the f0g1 sideband ladder
+     (ge pi -> ef pi -> f0g1 pi, identical to the Fock-state T1/T2 nodes).
+  3. Reset qubit frequency to the bare GE IF (n=0 photons).
+  4. Standard Ramsey:  x90 -> wait(tau) -> x90
+  5. Measure qubit state.
 
-P(e) oscillates primarily at f_χ = χ_eff/(2π) (n=1 term dominates for nÌ„ â‰ˆ 1).
-A damped-cosine fit extracts f_χ and τ_parity = 1/(2Â·f_χ).
+With 1 photon in the cavity the qubit is detuned from the bare GE frequency
+by chi_eff, so P(e) oscillates at f_chi = chi_eff / (2*pi).
+A damped-cosine fit extracts f_chi and t_parity = 1 / (2 * f_chi).
+
+Prerequisites: calibrated f0g1 sideband (nodes 26, 26b, 26e, 26f) and EF_x180.
 
 State updates
 -------------
-  â€¢ cavity_transmon_pairs["{qubit}_{mode}"].parity_time   [seconds]
-  â€¢ cavity_transmon_pairs["{qubit}_{mode}"].chi           [Hz]
+  - cavity_transmon_pairs["{qubit}_{mode}"].parity_time   [seconds]  (always)
+  - cavity_transmon_pairs["{qubit}_{mode}"].chi           [Hz]       (only if currently None)
     chi = -chi_eff_hz  (full per-photon shift, negative for typical transmon-cavity)
-    chi_eff_hz is the Ramsey oscillation frequency â‰ˆ PNRS peak spacing (n=0→1).
 """
 
 node = QualibrationNode[Parameters, Quam](
@@ -95,19 +98,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     cavity_mode = _get_cavity_mode(node)
     node.namespace["cavity_mode"] = cavity_mode
 
-    # Resolve sideband_drive for optional active cavity cooling
     mode_name = node.parameters.mode_name
-    sideband_drive = None
-    alpha_max = 1.0
-    pairs = getattr(node.machine, "cavity_transmon_pairs", {})
-    for pair_key, pair in pairs.items():
-        if pair_key.endswith(f"_{mode_name}"):
-            if getattr(pair, "sideband_drive", None) is not None:
-                sideband_drive = pair.sideband_drive
-            if getattr(pair, "displacement_alpha_max", None) is not None:
-                alpha_max = float(pair.displacement_alpha_max)
-            break
-    node.namespace["sideband_drive"] = sideband_drive
+    pair, qubit_pair, sb_drive, _ = _get_pair_components(node)
+    node.namespace["sb_drive"] = sb_drive
+    node.namespace["pair"] = pair
+    base_qubit_if = int(qubit_pair.xy.intermediate_frequency)
+    node.namespace["base_qubit_if"] = base_qubit_if
+    node.namespace["sideband_drive"] = sb_drive
 
     # -- Delay sweep -----------------------------------------------------------
     min_ns  = node.parameters.min_delay_ns
@@ -129,7 +126,6 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         ),
     }
 
-    disp_scale = float(node.parameters.displacement_scale) / alpha_max
     n_avg = node.parameters.num_shots
 
     with program() as node.namespace["qua_program"]:
@@ -173,26 +169,25 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             log_callable=node.log,
                         )
 
-                    # -- Cavity displacement (~nÌ„ photons) ----------------------
+                    # -- Fock |1> preparation via f0g1 sideband ladder --------
                     align()
-                    cavity_mode.cavity_mode_drive.play(
-                        "displacement", amplitude_scale=disp_scale
-                    )
+                    _fock_prep_qua(1, node.namespace["pair"], qubit,
+                                   node.namespace["sb_drive"])
 
-                    # -- Parity Ramsey: selective_y90 → wait(τ) → selective_y90 --
-                    # selective_y90 = frame_rotation(+π/2) Â· selective_x180/2 Â· frame_rotation(-π/2)
-                    # Restoring the frame after each half-pulse preserves phase coherence.
+                    # -- Reset qubit to bare GE frequency (n=0) ---------------
+                    align()
+                    qubit.xy.update_frequency(node.namespace["base_qubit_if"])
+
+                    # -- Standard Ramsey: x90 -> wait(tau) -> x90 -------------
                     for i, qubit in multiplexed_qubits.items():
-                        align(cavity_mode.cavity_mode_drive.name, qubit.xy.name)
-                        qubit.xy.frame_rotation_2pi(0.25)
-                        qubit.xy.play("selective_x180", amplitude_scale=0.5)
-                        qubit.xy.frame_rotation_2pi(-0.25)
-                    for i, qubit in multiplexed_qubits.items():
-                        wait(tau_clk_v, qubit.xy.name)
-                    for i, qubit in multiplexed_qubits.items():
-                        qubit.xy.frame_rotation_2pi(0.25)
-                        qubit.xy.play("selective_x180", amplitude_scale=0.5)
-                        qubit.xy.frame_rotation_2pi(-0.25)
+                        align(qubit.xy.name)
+                    with strict_timing_():
+                        for i, qubit in multiplexed_qubits.items():
+                            qubit.xy.play("x90")
+                        for i, qubit in multiplexed_qubits.items():
+                            wait(tau_clk_v, qubit.xy.name)
+                        for i, qubit in multiplexed_qubits.items():
+                            qubit.xy.play("x90")
 
                     # -- Measure -----------------------------------------------
                     for i, qubit in multiplexed_qubits.items():
@@ -315,16 +310,19 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             pairs = getattr(node.machine, "cavity_transmon_pairs", None)
             if pairs is not None and pair_key in pairs:
                 pairs[pair_key].parity_time = float(res.parity_time_s)
-                # chi_eff_hz is the Ramsey oscillation frequency = PNRS peak spacing (n=0→1)
-                # pair.chi stores the full per-photon shift with sign: chi = -chi_eff_hz
-                pairs[pair_key].chi = -float(res.chi_eff_hz)
+                # Only write chi if not yet calibrated by another node (e.g. chi_ramsey_stark)
+                if pairs[pair_key].chi is None:
+                    pairs[pair_key].chi = -float(res.chi_eff_hz)
+                    node.log(f"  chi written: {-res.chi_eff_hz / 1e3:.2f} kHz")
+                else:
+                    node.log(f"  chi kept: {pairs[pair_key].chi / 1e3:.2f} kHz (not overwritten)")
                 node.log(
                     f"Updated {pair_key}.parity_time = {res.parity_time_s * 1e9:.0f} ns  |  "
                     f"chi = {-res.chi_eff_hz / 1e3:.2f} kHz"
                 )
             else:
                 logger.warning(
-                    "cavity_transmon_pairs[%s] not found â€” "
+                    "cavity_transmon_pairs[%s] not found — "
                     "parity_time not persisted.", pair_key
                 )
 

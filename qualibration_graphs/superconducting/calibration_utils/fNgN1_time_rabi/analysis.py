@@ -1,10 +1,11 @@
 """
-Analysis utilities for the f0g1 time Rabi experiment.
+Analysis utilities for the fNgN1 time Rabi experiment.
 
-The sequence prepares the qubit in |f>, drives the f0g1 sideband with a variable
-duration pulse, swaps back (pi_ef) and measures.  The qubit state oscillates as a
-function of drive duration (Rabi-like fringe). The pi-pulse duration is extracted
-from the first minimum of the fitted sinusoid.
+The sequence prepares the qubit in |f⟩ and the cavity in Fock |n⟩, drives the
+f{n}g{n+1} sideband with a variable duration pulse, swaps back (pi_ef) and
+measures.  The qubit state oscillates as a function of drive duration (Rabi-like
+fringe). The pi-pulse duration is extracted from the first minimum of the fitted
+sinusoid.
 """
 import logging
 from dataclasses import dataclass
@@ -26,9 +27,9 @@ from qualibration_libs.analysis import oscillation
 
 @dataclass
 class FitParameters:
-    """Fit results for a single qubit's f0g1 time Rabi experiment."""
+    """Fit results for a single qubit's fNgN1 time Rabi experiment."""
     pi_duration_ns: float
-    """Calibrated pi-pulse duration [ns] for the f0g1 channel."""
+    """Calibrated pi-pulse duration [ns] for the sideband channel."""
     num_periods: float
     """Number of Rabi oscillation periods across the duration sweep."""
     chi2: float
@@ -43,7 +44,7 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
         status = "SUCCESS" if result["success"] else "FAIL"
         log_callable(
             f"Results for qubit {q}: {status}\n"
-            f"\tf0g1 pi-duration: {result['pi_duration_ns']:.0f} ns | "
+            f"\tsideband pi-duration: {result['pi_duration_ns']:.0f} ns | "
             f"chi2: {result['chi2']:.3f} | "
             f"periods: {result['num_periods']:.2f}"
         )

@@ -41,7 +41,7 @@ description = """
 Sweeps the sideband drive frequency while the qubit is prepared in |f⟩ and the
 cavity is prepared in Fock |fock_level⟩.
 
-When the sideband drive is resonant, the |f, n⟩ â†" |g, n+1⟩ transition is driven,
+When the sideband drive is resonant, the |f, n⟩ ↔ |g, n+1⟩ transition is driven,
 the qubit is left in |g⟩, and the back-swap π_ef leaves it in |g⟩ → DIP in state
 measurement.
 
@@ -93,7 +93,7 @@ def _centre_rf_freq(node, pair, qubit, sideband_drive, cav_mode):
     """Return the centre RF frequency for the transition being calibrated.
 
     When use_theoretical_frequency_estimate=True:
-      - k=0: uses 2Â·f_ge + anharmonicity âˆ' f_cav.
+      - k=0: uses 2·f_ge + anharmonicity − f_cav.
       - k>0: offsets f0g1 by k × |chi|.
     When False (default): returns the RF_frequency already saved in the state.
     """
@@ -180,16 +180,16 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                 with for_(*from_array(f, dfs)):
                     for i, qubit in multiplexed_qubits.items():
-                        # â"€â"€ Fock state preparation â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+                        # ── Fock state preparation ──────────────────────────
                         _fock_prep_qua(k, pair, qubit, sideband_drive)
 
-                        # â"€â"€ Prepare qubit in |f⟩ at Fock-k-shifted frequencies â"€
+                        # ── Prepare qubit in |f⟩ at Fock-k-shifted frequencies ─
                         qubit.xy.update_frequency(ge_if_k)
                         qubit.xy.play("x180")
                         qubit.xy.update_frequency(ef_if_k)
                         qubit.xy.play("EF_x180")
 
-                        # â"€â"€ Sweep sideband around this transition â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+                        # ── Sweep sideband around this transition ───────────
                         sideband_drive.update_frequency(target_if_base + f)
                         align(qubit.xy.name, sideband_drive.name)
                         amp_scale = node.parameters.operation_amplitude_factor
@@ -207,12 +207,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         else:
                             sideband_drive.play(op, amplitude_scale=amp_scale)
 
-                        # â"€â"€ Back-swap â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+                        # ── Back-swap ──────────────────────────────────────
                         align(sideband_drive.name, qubit.xy.name)
                         qubit.xy.update_frequency(ef_if_k)
                         qubit.xy.play("EF_x180")
 
-                        # â"€â"€ Readout â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+                        # ── Readout ────────────────────────────────────────
                         align(qubit.xy.name, qubit.resonator.name)
                         qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
                         save(I[i], I_st[i])
@@ -225,7 +225,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             save(state[i], state_st[i])
                         qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
-                        # â"€â"€ Reset cavity and qubit â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€â"€
+                        # ── Reset cavity and qubit ─────────────────────────
                         cav_mode.reset(
                             node.parameters.cavity_reset_type,
                             node.parameters.simulate,

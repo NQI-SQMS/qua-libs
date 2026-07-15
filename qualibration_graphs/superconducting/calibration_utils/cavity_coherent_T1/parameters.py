@@ -16,8 +16,8 @@ class NodeSpecificParameters(RunnableParameters):
     """Which cavity mode to probe: 'alice' or 'bob'."""
     cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
     """How to reset the cavity before each displacement.
-    'thermal'         â€” wait thermalization_time_factor × T1 (passive decay).
-    'active_sideband' â€” drive f0g1 π-pulses to actively remove photons; requires a
+    'thermal'         — wait thermalization_time_factor × T1 (passive decay).
+    'active_sideband' — drive f0g1 π-pulses to actively remove photons; requires a
                         calibrated f0g1_pi operation on the sideband_drive of the
                         corresponding CavityTransmonPair."""
     cavity_active_cooling_fock_n: int = 1
@@ -35,9 +35,9 @@ class NodeSpecificParameters(RunnableParameters):
         amplitude_scale = displacement_alpha / displacement_alpha_max
     where displacement_alpha_max is read from the CavityTransmonPair in the
     QuAM state (set by node 26/30 calibration).
-    displacement_alpha = 1 → |α|Â² = 1 mean photon after calibration.
+    displacement_alpha = 1 → |α|² = 1 mean photon after calibration.
     The runtime check ensures amplitude_scale stays within the QUA hardware
-    limit Â±(2 - 2^-16)."""
+    limit ±(2 - 2^-16)."""
     delay_repeats: int = 1
     """Number of times to repeat the wait per point.  Extends the effective
     sweep range: total time = delay_repeats × t_per_rep × 4 ns.

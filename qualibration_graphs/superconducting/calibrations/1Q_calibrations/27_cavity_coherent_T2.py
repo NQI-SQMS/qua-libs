@@ -6,6 +6,7 @@ import numpy as np
 import xarray as xr
 
 from qm.qua import *
+from qm.qua.lib import Cast
 
 from qualang_tools.multi_user import qm_session
 from qualang_tools.results import progress_counter
@@ -117,7 +118,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         raise ValueError(
             f"displacement_alpha={node.parameters.displacement_alpha} / "
             f"alpha_max={alpha_max} = {amplitude_scale:.4f} exceeds the QUA "
-            f"hardware limit Â±{_AMP_MAX:.6f}.  Reduce displacement_alpha."
+            f"hardware limit ±{_AMP_MAX:.6f}.  Reduce displacement_alpha."
         )
     node.namespace["amplitude_scale"] = amplitude_scale
     node.log(
@@ -126,8 +127,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     )
 
     cavity_IF = int(cavity_mode.cavity_mode_drive.intermediate_frequency)
-    detuned_IF = cavity_IF + int(node.parameters.ramsey_detuning_hz)
-    node.log(f"Ramsey detuning: {node.parameters.ramsey_detuning_hz:.0f} Hz  (cavity_IF {cavity_IF} → {detuned_IF})")
+    # Phase increment per clock cycle (4 ns) for the Ramsey frame rotation: turns/cc
+    detuning_turns_per_cc = node.parameters.ramsey_detuning_hz * 1e-9 * 4
+    node.log(f"Ramsey detuning: {node.parameters.ramsey_detuning_hz:.0f} Hz  (cavity_IF {cavity_IF}, {detuning_turns_per_cc:.6f} turns/cc)")
 
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
@@ -139,6 +141,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     with program() as node.namespace["qua_program"]:
         n = declare(int)
         t = declare(int)
+        phase = declare(fixed)
         n_st = declare_stream()
 
         I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
@@ -172,31 +175,33 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             log_callable=node.log,
                         )
 
-                    # -- 2. Shift cavity drive and displace → |α⟩ -------------
+                    # -- 2. Displace cavity → |α⟩ (at natural cavity_IF) ------
                     align()
-                    cavity_mode.cavity_mode_drive.update_frequency(detuned_IF)
                     cavity_mode.cavity_mode_drive.play(
                         "displacement",
                         amplitude_scale=node.namespace["amplitude_scale"],
                     )
 
-                    # -- 3. Wait tau -------------------------------------------
+                    # -- 3. Wait tau + apply Ramsey phase via frame rotation ---
+                    # frame_rotation_2pi gives a deterministic phase = detuning × t
+                    # for every shot at the same t, avoiding the phase drift that
+                    # update_frequency accumulates across shots.
                     align()
-                    for i, qubit in multiplexed_qubits.items():
-                        qubit.resonator.wait(t)
+                    assign(phase, Cast.mul_fixed_by_int(detuning_turns_per_cc, t))
+                    with strict_timing_():
+                        cavity_mode.cavity_mode_drive.wait(t)
+                        frame_rotation_2pi(phase, cavity_mode.cavity_mode_drive.name)
 
-                    # -- 4. Reverse displacement (phase offset = 2π×detuning×τ)
-                    align()
+                    # -- 4. Reverse displacement (with Ramsey phase applied) ---
                     cavity_mode.cavity_mode_drive.play(
                         "displacement",
                         amplitude_scale=-node.namespace["amplitude_scale"],
                     )
-                    cavity_mode.cavity_mode_drive.update_frequency(cavity_IF)
+                    reset_frame(cavity_mode.cavity_mode_drive.name)
 
                     # -- 5. π pulse on qubit -----------------------------------
                     align()
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.xy.update_frequency(qubit.xy.intermediate_frequency)
                         qubit.xy.play(node.parameters.qubit_probe_operation)
 
                     # -- 7. Measure --------------------------------------------

@@ -1,5 +1,5 @@
-﻿"""Plotting utilities for the f0g1 time Rabi experiment."""
-from typing import Dict, List, Optional
+"""Plotting utilities for the fNgN1 time Rabi experiment."""
+from typing import Dict, Optional
 
 import numpy as np
 import xarray as xr
@@ -16,14 +16,14 @@ def plot_raw_data_with_fit(
     fit_results: Optional[Dict] = None,
     mode_name: str = "alice",
 ) -> Figure:
-    """Plot f0g1 time Rabi oscillations vs pulse duration for each qubit."""
+    """Plot fNgN1 time Rabi oscillations vs pulse duration for each qubit."""
     grid = QubitGrid(ds, [q.grid_location for q in qubits])
     for ax, qubit in grid_iter(grid):
         q_name = qubit["qubit"]
         q_fit_params = fit_results.get(q_name) if fit_results else None
         _plot_single(ax, ds.loc[qubit], fits.sel(qubit=q_name), q_fit_params)
 
-    grid.fig.suptitle(f"f0g1 Time Rabi — {mode_name}")
+    grid.fig.suptitle(f"fNgN1 Time Rabi — {mode_name}")
     grid.fig.set_size_inches(12, 7)
     grid.fig.tight_layout()
     return grid.fig

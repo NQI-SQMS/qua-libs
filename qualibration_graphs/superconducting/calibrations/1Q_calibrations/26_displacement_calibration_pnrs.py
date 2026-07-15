@@ -35,21 +35,21 @@ logger = logging.getLogger(__name__)
 
 # %% {Description}
 description = """
-        DISPLACEMENT CALIBRATION â€” PHOTON NUMBER RESOLVED SPECTROSCOPY METHOD (28)
+        DISPLACEMENT CALIBRATION — PHOTON NUMBER RESOLVED SPECTROSCOPY METHOD (28)
 
 Sweeps the cavity displacement pulse amplitude A (outer loop) and the qubit
 ge spectroscopy frequency (inner loop).  For each amplitude A a spectrum is
 acquired; N Gaussian peaks are fitted to extract the photon-number distribution
-P(n).  The mean photon number nÌ„ = Î£ nÂ·P(n) is computed for every A, and the
-calibration curve nÌ„ = kÂ·AÂ² is fitted to obtain:
+P(n).  The mean photon number n̄ = Σ n·P(n) is computed for every A, and the
+calibration curve n̄ = k·A² is fitted to obtain:
 
-    Aâ‚ph = 1/âˆšk  â€” displacement amplitude_scale that deposits 1 photon on average
+    A₁ph = 1/√k  — displacement amplitude_scale that deposits 1 photon on average
 
 The dispersive shift chi = -(PNRS peak spacing) [Hz] is also extracted from the spectra.
 
 Physical model:
-    Ï‰_q(n) = Ï‰_q + chiÂ·n   (each photon shifts the qubit by chi; chi < 0)
-    P(n)   = exp(-nÌ„) Â· nÌ„â¿ / n!   (coherent state: Poisson distribution)
+    ω_q(n) = ω_q + chi·n   (each photon shifts the qubit by chi; chi < 0)
+    P(n)   = exp(-n̄) · n̄ⁿ / n!   (coherent state: Poisson distribution)
 
 Prerequisites:
     - Calibrated selective_x180 pulse (node 14b).
@@ -57,7 +57,7 @@ Prerequisites:
     - Displacement pulse operation present on cavity_mode_drive.
 
 State updates:
-    - cavity_mode.cavity_mode_drive.operations["displacement"].amplitude  (= Aâ‚ph)
+    - cavity_mode.cavity_mode_drive.operations["displacement"].amplitude  (= A₁ph)
     - cavity_transmon_pairs["{qubit}_{mode}"].chi
     - cavity_transmon_pairs["{qubit}_{mode}"].displacement_k  (= k)
 """
@@ -318,7 +318,7 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             MAX_VOLTAGE = 0.5
             AMP_SCALE_LIMIT = 1.9
             alpha_max = MAX_VOLTAGE / (cal_amplitude_1ph * AMP_SCALE_LIMIT)
-            cal_amplitude = cal_amplitude_1ph * alpha_max  # â‰ˆ 0.263 V
+            cal_amplitude = cal_amplitude_1ph * alpha_max  # ≈ 0.263 V
 
             cavity_mode.cavity_mode_drive.operations["displacement"].amplitude = float(cal_amplitude)
 
@@ -338,7 +338,7 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                     pairs[pair_key].displacement_alpha_max = float(alpha_max)
             else:
                 logger.warning(
-                    f"machine has no cavity_transmon_pairs field â€” "
+                    f"machine has no cavity_transmon_pairs field — "
                     f"chi/k for '{pair_key}' not persisted to QUAM. "
                     "Check that SrfQuam is the active QUAM class."
                 )

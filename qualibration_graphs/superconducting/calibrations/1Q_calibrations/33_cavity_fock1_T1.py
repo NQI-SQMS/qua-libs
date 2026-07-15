@@ -21,6 +21,7 @@ from calibration_utils.shared import (
     _resolve_sb_op,
     _ef_if_at_fock,
     _ge_if_at_fock,
+    _fock_prep_qua,
 )
 from qualibration_libs.parameters import (
     get_qubits,
@@ -185,9 +186,8 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         qubit.xy.wait(qubit.thermalization_time // 4)
 
                         if prep_method == "sideband":
-                            # Sideband and ef frequencies at Fock |0> (cavity in vacuum)
+                            # Frequencies at Fock |0> needed for the inverse sideband readout
                             ef_if_0 = _ef_if_at_fock(pair, qubit, 0)
-                            op_0 = _resolve_sb_op(sideband_drive, 0)
                             sb_rf_0 = _get_transition_rf(pair, sideband_drive, 0)
                             target_if_0 = int(sideband_drive.intermediate_frequency) + int(sb_rf_0 - sideband_drive.RF_frequency)
                             tr_0 = pair.transitions.get("f0g1")
@@ -195,16 +195,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                             # -- 2a. Fock |1> prep: ge pi -> ef pi -> f0g1 pi ---
                             align(qubit.xy.name, sideband_drive.name, qubit.resonator.name)
-                            qubit.xy.update_frequency(qubit_IF)
-                            qubit.xy.play("x180")           # ge pi  ->  |e,0>
-                            qubit.xy.update_frequency(ef_if_0)
-                            qubit.xy.play("EF_x180")        # ef pi  ->  |f,0>
-                            align(qubit.xy.name, sideband_drive.name)
-                            sideband_drive.update_frequency(target_if_0)
-                            if flat_top_clk_0 is not None:
-                                sideband_drive.play(op_0, duration=flat_top_clk_0)  # f0g1 pi -> |g,1>
-                            else:
-                                sideband_drive.play(op_0)
+                            _fock_prep_qua(1, pair, qubit, sideband_drive)
                             align(sideband_drive.name, qubit.xy.name, qubit.resonator.name)
 
                             # -- 3a. Wait tau ----------------------------------
@@ -215,10 +206,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             # |g,0> unchanged            if photon decayed
                             align(sideband_drive.name, qubit.xy.name, qubit.resonator.name)
                             sideband_drive.update_frequency(target_if_0)
-                            if flat_top_clk_0 is not None:
-                                sideband_drive.play(op_0, duration=flat_top_clk_0)
-                            else:
-                                sideband_drive.play(op_0)
+                            with strict_timing_():
+                                sideband_drive.play("sideband_ramp_up")
+                                if flat_top_clk_0 is not None:
+                                    sideband_drive.play("sideband_square", duration=flat_top_clk_0)
+                                else:
+                                    sideband_drive.play("sideband_square")
+                                sideband_drive.play("sideband_ramp_down")
                             align(sideband_drive.name, qubit.xy.name)
                             qubit.xy.update_frequency(ef_if_0)
                             qubit.xy.play("EF_x180")

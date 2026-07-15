@@ -28,7 +28,7 @@ It then Processes and fits the extracted flux response to model it as a sum of d
 
 Workflow:
 For each qubit, sweep detuning over the configured span and flux-pulse duration over the configured time axis; play a constant Z pulse with amplitude `flux_amp`, then a chosen XY operation (default π), and measure I/Q or state.
-Analysis: convert raw data to volts and extract the center frequency vs detuning at each time; derive the flux response using each qubit’s `freq_vs_flux_01_quad_term`; fit a sum of exponentials and determine the best components and DC term.
+Analysis: convert raw data to volts and extract the center frequency vs detuning at each time; derive the flux response using each qubit's `freq_vs_flux_01_quad_term`; fit a sum of exponentials and determine the best components and DC term.
 State update (optional): convert the fitted sum-of-exponentials to a cascade representation and write it to the state.json.
 
 

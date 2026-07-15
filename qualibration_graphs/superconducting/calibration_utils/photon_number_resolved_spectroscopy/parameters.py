@@ -1,4 +1,4 @@
-﻿from typing import Literal, Optional
+from typing import Literal, Optional
 
 from qualibrate import NodeParameters
 from qualibrate.core.parameters import RunnableParameters
@@ -27,8 +27,8 @@ class NodeSpecificParameters(RunnableParameters):
     max_peaks: int = 8
     """Maximum number of photon-number peaks to try when fitting."""
     chi2_threshold: float = 0.005
-    """Reduced chiÂ² threshold for stopping peak search.  The auto-fitter adds
-    peaks until chiÂ² drops below this value.  Lower values force more peaks to
+    """Reduced chi² threshold for stopping peak search.  The auto-fitter adds
+    peaks until chi² drops below this value.  Lower values force more peaks to
     be tried before stopping; raise if over-fitting noise, lower if weak peaks
     are missed.  The 3% amplitude floor in the fitter already prevents purely
     spurious peaks from being accepted."""
@@ -38,8 +38,8 @@ class NodeSpecificParameters(RunnableParameters):
     or 'x180' (standard pi-pulse, faster but lower frequency resolution)."""
     cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
     """How to reset the cavity between shots.
-    'thermal'        â€” wait thermalization_time_factor × T1 (passive decay).
-    'active_sideband'â€” drive f0g1 π-pulses to actively remove photons; requires a
+    'thermal'        — wait thermalization_time_factor × T1 (passive decay).
+    'active_sideband'— drive f0g1 π-pulses to actively remove photons; requires a
                        calibrated f0g1_pi operation on the sideband_drive of the
                        corresponding CavityTransmonPair."""
     cavity_active_cooling_fock_n: int = 1
