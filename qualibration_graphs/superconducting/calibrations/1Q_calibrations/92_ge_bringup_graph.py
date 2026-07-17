@@ -8,23 +8,22 @@ dedicated graphs (93_ef_bringup_graph.py, 94_cavity_bringup_graph.py) and
 should be run after this graph.
 
   ┌─────────────────────────────────────────────────────────────────────────┐
-  │  1.  mixer_calibration                                                  │
-  │  2.  resonator_bringup (subgraph):                                      │
+  │  1.  resonator_bringup (subgraph):                                      │
   │        resonator_discovery [loop: retry on no dip]:                     │
   │          broad_resonator_spectroscopy                                   │
   │          ──► resonator_spectroscopy_high_power                          │
   │        ──► resonator_punch_out        [loop: retry on failure]          │
   │        ──► resonator_spectroscopy_low_power                             │
-  │  3.  qubit_calibration (subgraph, nested loops):                        │
+  │  2.  qubit_calibration (subgraph, nested loops):                        │
   │        qubit_spectroscopy_vs_power    [inner loop: span expansion]      │
   │          (power-broadening fit → sets saturation & x180 amplitude)      │
   │        ──► time_rabi (saturation pulse)                                 │
   │        [outer loop: restart on NO_OSCILLATION → new freq search]        │
-  │  4.  x180_fine_calibration (subgraph):                                  │
+  │  3.  x180_fine_calibration (subgraph):                                  │
   │        rabi_ramsey [loop: repeat until freq converges]                  │
   │          power_rabi ──► ramsey                                          │
-  │  5.  T1                                                                 │
-  │  6.  ge_readout_optimization (subgraph):                                │
+  │  4.  T1                                                                 │
+  │  5.  ge_readout_optimization (subgraph):                                │
   │        readout_length_optimization                                      │
   │        ──► readout_frequency_optimization                               │
   │        ──► readout_power_optimization                                   │
@@ -52,6 +51,7 @@ from calibration_utils.bringup_graphs import (
     should_restart_qubit_calibration,
 )
 
+
 library = QualibrationLibrary.get_active_library()
 
 test_qubits = ["q1"]
@@ -78,12 +78,6 @@ class TransmonBringUpParameters(GraphParameters):
     x180_max_iterations: int = 10
     x180_rabi_max_amplitude_iterations: int = 5
 
-    # ── Mixer calibration ──────────────────────────────────────────────────────
-    mixer_calibrate_resonator: bool = True
-    mixer_calibrate_drive: bool = True
-    mixer_calibrate_cavity_drive: bool = True
-    mixer_calibrate_sideband_drive: bool = True
-
     # ── Adaptive behaviour ─────────────────────────────────────────────────────
     use_adaptive_span: bool = True
     spec_vs_power_use_adaptive_span: bool = True
@@ -100,21 +94,11 @@ with QualibrationGraph.build(
     parameters=TransmonBringUpParameters(),
 ) as graph:
 
-    # ── 1. Mixer calibration ──────────────────────────────────────────────────
-    mixer_calibration = library.nodes["01a_mixer_calibration"].copy(
-        name="mixer_calibration",
-        calibrate_resonator=graph.parameters.mixer_calibrate_resonator,
-        calibrate_drive=graph.parameters.mixer_calibrate_drive,
-        calibrate_cavity_drive=graph.parameters.mixer_calibrate_cavity_drive,
-        calibrate_sideband_drive=graph.parameters.mixer_calibrate_sideband_drive,
-    )
-    graph.add_node(mixer_calibration)
-
-    # ── 2. Resonator bring-up ─────────────────────────────────────────────────
+    # ── 1. Resonator bring-up ─────────────────────────────────────────────────
     resonator_bringup = build_resonator_bringup(graph, library)
     graph.add_node(resonator_bringup)
 
-    # ── 3. Qubit calibration (FSM: spec-vs-power → time Rabi) ─────────────────
+    # ── 2. Qubit calibration (FSM: spec-vs-power → time Rabi) ─────────────────
     qubit_calibration = build_qubit_calibration(graph, library)
     graph.add_node(qubit_calibration)
     graph.loop(
@@ -123,11 +107,11 @@ with QualibrationGraph.build(
         max_iterations=graph.parameters.max_qubit_calibration_iterations,
     )
 
-    # ── 4. X180 fine calibration (power_rabi → ramsey loop) ───────────────────
+    # ── 3. X180 fine calibration (power_rabi → ramsey loop) ───────────────────
     x180_fine_calibration = build_x180_fine_calibration(graph, library)
     graph.add_node(x180_fine_calibration)
 
-    # ── 5. T1 ─────────────────────────────────────────────────────────────────
+    # ── 4. T1 ─────────────────────────────────────────────────────────────────
     t1 = library.nodes["05_T1"].copy(
         name="T1",
         num_shots=200,
@@ -138,12 +122,11 @@ with QualibrationGraph.build(
     )
     graph.add_node(t1)
 
-    # ── 6. GE readout optimization (length → frequency → power → IQ blobs) ────
+    # ── 5. GE readout optimization (length → frequency → power → IQ blobs) ────
     ge_readout_opt = build_ge_readout_optimization(graph, library)
     graph.add_node(ge_readout_opt)
 
     # ── Execution order ────────────────────────────────────────────────────────
-    graph.connect(mixer_calibration, resonator_bringup)
     graph.connect(resonator_bringup, qubit_calibration)
     graph.connect(qubit_calibration, x180_fine_calibration)
     graph.connect(x180_fine_calibration, t1)

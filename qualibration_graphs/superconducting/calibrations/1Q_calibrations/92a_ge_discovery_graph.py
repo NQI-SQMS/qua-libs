@@ -1,8 +1,8 @@
 # %%
 """
-Qubit Optimization Graph (Adaptive)
+GE Discovery Graph (Adaptive)
 
-This graph finds the ideal qubit parameters through a self-correcting nested loop.
+This graph finds the ideal GE qubit parameters through a self-correcting nested loop.
 The three nodes form an inner calibration subgraph that is repeated until the Rabi
 calibration succeeds:
 
@@ -37,8 +37,8 @@ library = QualibrationLibrary.get_active_library()
 test_qubits = ["q1"]
 
 
-class QubitOptimizationParameters(GraphParameters):
-    """Graph-flow parameters for the adaptive qubit optimization graph."""
+class GEDiscoveryParameters(GraphParameters):
+    """Graph-flow parameters for the adaptive GE discovery graph."""
 
     qubits: List[str] = test_qubits
     multiplexed: bool = False
@@ -48,8 +48,8 @@ class QubitOptimizationParameters(GraphParameters):
 
 
 with QualibrationGraph.build(
-    "qubit_optimization",
-    parameters=QubitOptimizationParameters(),
+    "ge_discovery",
+    parameters=GEDiscoveryParameters(),
 ) as graph:
     qubit_calibration = build_qubit_calibration(graph, library)
     graph.add_node(qubit_calibration)

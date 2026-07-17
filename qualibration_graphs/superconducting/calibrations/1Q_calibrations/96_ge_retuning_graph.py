@@ -8,6 +8,7 @@ measures GE IQ blobs for state discrimination:
   x180_refinement [loop until |detuning| < freq_threshold_hz, max_iterations]:
     ramsey     → measure and correct qubit GE frequency
     power_rabi → recalibrate x180 amplitude
+  → selective_rabi
   → IQ_blobs (GE)
 
 Ramsey parameters are computed from the current T2* stored in the QUAM state:
@@ -59,34 +60,9 @@ _GE_DETUNING_MHZ: float = round(10.0 / (_GE_MAX_WAIT_NS * 1e-3), 6)  # 10 period
 
 
 class GERetuningParameters(GraphParameters):
-    """Parameters for the GE retuning graph."""
+    """Graph-flow parameters for the GE retuning graph."""
 
     qubits: List[str] = _DEFAULT_QUBITS
-
-    # Power Rabi
-    rabi_min_amp_factor: float = 0.001
-    rabi_max_amp_factor: float = 1.9
-    rabi_amp_factor_step: float = 0.01
-    rabi_num_shots: int = 200
-
-    # Ramsey (defaults computed from QUAM T2*)
-    ramsey_num_shots: int = 200
-    ramsey_min_wait_time_in_ns: int = 16
-    ramsey_max_wait_time_in_ns: int = _GE_MAX_WAIT_NS
-    ramsey_frequency_detuning_in_mhz: float = _GE_DETUNING_MHZ
-    ramsey_wait_time_num_points: int = 100
-    ramsey_log_or_linear_sweep: str = "linear"
-
-    # Selective Power Rabi
-    selective_rabi_min_amp_ratio: float = -1.8
-    selective_rabi_max_amp_ratio: float = 1.8
-    selective_rabi_amp_points: int = 101
-    selective_rabi_num_shots: int = 100
-
-    # IQ blobs
-    iq_blobs_num_shots: int = 2000
-
-    # Convergence
     freq_threshold_hz: float = 50_000.0
     max_iterations: int = 5
 
@@ -183,22 +159,22 @@ with QualibrationGraph.build(
 
         ramsey = library.nodes["06a_ramsey"].copy(
             name="ramsey",
-            num_shots=ge_graph.parameters.ramsey_num_shots,
-            min_wait_time_in_ns=ge_graph.parameters.ramsey_min_wait_time_in_ns,
-            max_wait_time_in_ns=ge_graph.parameters.ramsey_max_wait_time_in_ns,
-            frequency_detuning_in_mhz=ge_graph.parameters.ramsey_frequency_detuning_in_mhz,
-            wait_time_num_points=ge_graph.parameters.ramsey_wait_time_num_points,
-            log_or_linear_sweep=ge_graph.parameters.ramsey_log_or_linear_sweep,
+            num_shots=200,
+            min_wait_time_in_ns=16,
+            max_wait_time_in_ns=_GE_MAX_WAIT_NS,
+            frequency_detuning_in_mhz=_GE_DETUNING_MHZ,
+            wait_time_num_points=100,
+            log_or_linear_sweep="linear",
             use_state_discrimination=True,
         )
         x180_refinement.add_node(ramsey)
 
         power_rabi = library.nodes["04b_power_rabi"].copy(
             name="power_rabi",
-            min_amp_factor=ge_graph.parameters.rabi_min_amp_factor,
-            max_amp_factor=ge_graph.parameters.rabi_max_amp_factor,
-            amp_factor_step=ge_graph.parameters.rabi_amp_factor_step,
-            num_shots=ge_graph.parameters.rabi_num_shots,
+            min_amp_factor=0.001,
+            max_amp_factor=1.9,
+            amp_factor_step=0.01,
+            num_shots=200,
         )
         x180_refinement.add_node(power_rabi)
         x180_refinement.connect(ramsey, power_rabi)
@@ -210,19 +186,20 @@ with QualibrationGraph.build(
         max_iterations=ge_graph.parameters.max_iterations,
     )
 
-    selective_rabi = library.nodes["14b_selective_power_rabi"].copy(
+    selective_rabi = library.nodes["04b_power_rabi"].copy(
         name="selective_rabi",
-        min_amp_ratio=ge_graph.parameters.selective_rabi_min_amp_ratio,
-        max_amp_ratio=ge_graph.parameters.selective_rabi_max_amp_ratio,
-        amp_points=ge_graph.parameters.selective_rabi_amp_points,
-        num_shots=ge_graph.parameters.selective_rabi_num_shots,
+        operation="selective_x180",
+        min_amp_factor=0.001,
+        max_amp_factor=1.99,
+        amp_factor_step=0.01,
+        num_shots=200,
     )
     ge_graph.add_node(selective_rabi)
     ge_graph.connect(x180_refinement, selective_rabi)
 
     iq_blobs = library.nodes["07_iq_blobs"].copy(
         name="IQ_blobs",
-        num_shots=ge_graph.parameters.iq_blobs_num_shots,
+        num_shots=2000,
     )
     ge_graph.add_node(iq_blobs)
     ge_graph.connect(selective_rabi, iq_blobs)

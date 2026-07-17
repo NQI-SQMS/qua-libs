@@ -13,6 +13,7 @@ from qualang_tools.results import progress_counter
 from qualang_tools.units import unit
 
 from qualibrate import QualibrationNode
+from quam_builder.architecture.superconducting.qubit_pair.cavity_transmon_pair import SidebandTransition
 from calibration_utils.shared import (
     apply_confusion_matrix_correction,
     _get_cavity_mode,
@@ -64,7 +65,8 @@ Parameters:
   - reset_duration_step_in_ns:    step size [ns]
   - cavity_pre_reset_type:        'thermal' or 'active_sideband'
 
-No QuAM state update (characterisation node only).
+QuAM state update: on success, saves t95 [ns] to
+  ``pair.transitions["f0g1"].sideband_cooling_time``.
 """
 
 node = QualibrationNode[Parameters, Quam](
@@ -295,6 +297,33 @@ def analyse_data(node: QualibrationNode[Parameters, Quam]):
         q_name: ("successful" if res["success"] else "failed")
         for q_name, res in node.results["fit_results"].items()
     }
+
+
+# %% {Update_state}
+@node.run_action(skip_if=node.parameters.simulate)
+def update_state(node: QualibrationNode[Parameters, Quam]):
+    pair = _get_pair(node)
+    if pair is None:
+        node.log("No CavityTransmonPair found for this mode; skipping QuAM update.")
+        return
+
+    with node.record_state_updates():
+        for q_name, res in node.results["fit_results"].items():
+            if not res["success"]:
+                continue
+            t95_ns = res["t95_ns"]
+            if not np.isfinite(t95_ns):
+                continue
+            # Round to nearest 4 ns (QUA clock cycle requirement)
+            cooling_time_ns = int(round(t95_ns / 4)) * 4
+            if "f0g1" not in pair.transitions:
+                pair.transitions["f0g1"] = SidebandTransition()
+            pair.transitions["f0g1"].sideband_cooling_time = cooling_time_ns
+            node.log(
+                f"[{q_name}] sideband_cooling_time (t95) set to {cooling_time_ns} ns "
+                f"({cooling_time_ns * 1e-3:.1f} µs)"
+            )
+            break  # single sideband drive per mode
 
 
 # %% {Plot_data}

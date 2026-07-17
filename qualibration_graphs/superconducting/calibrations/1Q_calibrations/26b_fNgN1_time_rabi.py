@@ -16,8 +16,8 @@ from quam_config import Quam
 from qualibration_libs.data import XarrayDataFetcher
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.runtime import simulate_and_plot
-from calibration_utils.fNgN1_time_rabi import Parameters
-from calibration_utils.f0g1_time_rabi import (
+from calibration_utils.fNgN1_time_rabi import (
+    Parameters,
     FitParameters,
     process_raw_dataset,
     fit_raw_data,

@@ -8,6 +8,7 @@ then measures GEF IQ blobs for three-state discrimination:
   ef_x180_refinement [loop until |EF detuning| < freq_threshold_hz, max_iterations]:
     ef_ramsey     → measure and correct EF transition frequency (anharmonicity)
     ef_power_rabi → recalibrate EF_x180 amplitude
+  → selective_ef_rabi
   → gef_IQ_blobs (g/e/f)
 
 Ramsey parameters are computed from the current T2*_ef stored in the QUAM state:
@@ -63,34 +64,9 @@ _EF_DETUNING_MHZ: float = round(10.0 / (_EF_MAX_WAIT_NS * 1e-3), 6)  # 10 period
 
 
 class EFRetuningParameters(GraphParameters):
-    """Parameters for the EF retuning graph."""
+    """Graph-flow parameters for the EF retuning graph."""
 
     qubits: List[str] = _DEFAULT_QUBITS
-
-    # EF Power Rabi
-    rabi_min_amp_factor: float = 0.001
-    rabi_max_amp_factor: float = 1.9
-    rabi_amp_factor_step: float = 0.01
-    rabi_num_shots: int = 200
-
-    # EF Ramsey (defaults computed from QUAM T2*_ef)
-    ramsey_num_shots: int = 200
-    ramsey_min_wait_time_in_ns: int = 16
-    ramsey_max_wait_time_in_ns: int = _EF_MAX_WAIT_NS
-    ramsey_frequency_detuning_in_mhz: float = _EF_DETUNING_MHZ
-    ramsey_wait_time_num_points: int = 100
-    ramsey_log_or_linear_sweep: str = "linear"
-
-    # Selective EF Power Rabi
-    selective_rabi_min_amp_ratio: float = -1.8
-    selective_rabi_max_amp_ratio: float = 1.8
-    selective_rabi_amp_points: int = 101
-    selective_rabi_num_shots: int = 100
-
-    # GEF IQ blobs
-    gef_iq_blobs_num_shots: int = 2000
-
-    # Convergence
     freq_threshold_hz: float = 50_000.0
     max_iterations: int = 5
 
@@ -175,21 +151,21 @@ with QualibrationGraph.build(
 
         ef_ramsey = library.nodes["06b_ramsey_ef"].copy(
             name="ef_ramsey",
-            num_shots=ef_graph.parameters.ramsey_num_shots,
-            min_wait_time_in_ns=ef_graph.parameters.ramsey_min_wait_time_in_ns,
-            max_wait_time_in_ns=ef_graph.parameters.ramsey_max_wait_time_in_ns,
-            frequency_detuning_in_mhz=ef_graph.parameters.ramsey_frequency_detuning_in_mhz,
-            wait_time_num_points=ef_graph.parameters.ramsey_wait_time_num_points,
-            log_or_linear_sweep=ef_graph.parameters.ramsey_log_or_linear_sweep,
+            num_shots=200,
+            min_wait_time_in_ns=16,
+            max_wait_time_in_ns=_EF_MAX_WAIT_NS,
+            frequency_detuning_in_mhz=_EF_DETUNING_MHZ,
+            wait_time_num_points=100,
+            log_or_linear_sweep="linear",
         )
         ef_x180_refinement.add_node(ef_ramsey)
 
         ef_power_rabi = library.nodes["13_power_rabi_ef"].copy(
             name="ef_power_rabi",
-            min_amp_factor=ef_graph.parameters.rabi_min_amp_factor,
-            max_amp_factor=ef_graph.parameters.rabi_max_amp_factor,
-            amp_factor_step=ef_graph.parameters.rabi_amp_factor_step,
-            num_shots=ef_graph.parameters.rabi_num_shots,
+            min_amp_factor=0.001,
+            max_amp_factor=1.9,
+            amp_factor_step=0.01,
+            num_shots=200,
         )
         ef_x180_refinement.add_node(ef_power_rabi)
         ef_x180_refinement.connect(ef_ramsey, ef_power_rabi)
@@ -201,20 +177,20 @@ with QualibrationGraph.build(
         max_iterations=ef_graph.parameters.max_iterations,
     )
 
-    selective_ef_rabi = library.nodes["14b_selective_power_rabi"].copy(
+    selective_ef_rabi = library.nodes["13_power_rabi_ef"].copy(
         name="selective_ef_rabi",
         operation="selective_ef_x180",
-        min_amp_ratio=ef_graph.parameters.selective_rabi_min_amp_ratio,
-        max_amp_ratio=ef_graph.parameters.selective_rabi_max_amp_ratio,
-        amp_points=ef_graph.parameters.selective_rabi_amp_points,
-        num_shots=ef_graph.parameters.selective_rabi_num_shots,
+        min_amp_factor=0.001,
+        max_amp_factor=1.99,
+        amp_factor_step=0.01,
+        num_shots=200,
     )
     ef_graph.add_node(selective_ef_rabi)
     ef_graph.connect(ef_x180_refinement, selective_ef_rabi)
 
     gef_iq_blobs = library.nodes["15_iq_blobs_gef"].copy(
         name="gef_IQ_blobs",
-        num_shots=ef_graph.parameters.gef_iq_blobs_num_shots,
+        num_shots=2000,
     )
     ef_graph.add_node(gef_iq_blobs)
     ef_graph.connect(selective_ef_rabi, gef_iq_blobs)

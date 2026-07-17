@@ -961,29 +961,8 @@ def build_cavity_bringup(
     The caller is responsible for adding the returned subgraph to the outer
     graph and connecting it.
 
-    Reads the following attributes from ``graph.parameters``::
-
-        cavity_mode_name,
-        cavity_spec_frequency_span_mhz, cavity_spec_frequency_step_mhz,
-        cavity_spec_amplitude_factor, cavity_spec_num_shots,
-        cavity_spec_subtract_baseline,
-        cavity_disp_amp_min, cavity_disp_amp_max, cavity_disp_amp_points,
-        cavity_disp_num_shots, cavity_disp_subtract_baseline,
-        cavity_disp_use_adaptive, cavity_disp_target_n_sigma,
-        max_displacement_vacuum_iterations,
-        cavity_t1_min_wait_ns, cavity_t1_max_wait_ns, cavity_t1_num_points,
-        cavity_t1_num_shots,
-        cavity_t2_min_wait_ns, cavity_t2_max_wait_ns, cavity_t2_num_points,
-        cavity_t2_num_shots, cavity_t2_displacement_alpha,
-        cavity_t2_ramsey_detuning_hz,
-        parity_min_delay_ns, parity_max_delay_ns, parity_delay_step_ns,
-        parity_num_shots,
-        fock1_t1_min_wait_ns, fock1_t1_max_wait_ns, fock1_t1_num_points,
-        fock1_t1_num_shots, fock1_t1_prep_method,
-        fock1_t1_alpha1, fock1_t1_alpha2,
-        fock1_t2_min_wait_ns, fock1_t2_max_wait_ns, fock1_t2_num_points,
-        fock1_t2_num_shots, fock1_t2_prep_method,
-        fock1_t2_alpha1, fock1_t2_alpha2, fock1_t2_ramsey_detuning_hz
+    Reads ``cavity_mode_name`` and ``max_displacement_vacuum_iterations``
+    from ``graph.parameters``; all other node parameters are hardcoded.
     """
     p = graph.parameters
     mode = p.cavity_mode_name
@@ -1140,24 +1119,8 @@ def build_sideband_bringup(
     determines the graph structure.  Changing it after the graph is built has no
     effect; reload the library (re-run the graph file) to apply a new value.
 
-    Reads the following attributes from ``graph.parameters``::
-
-        qubits, mode_name, sideband_level, cavity_thermalization_time_ns,
-        spec_frequency_span_mhz, spec_frequency_step_mhz,
-        spec_amplitude_factor, spec_operation_len_ns, spec_num_shots,
-        rabi_min_duration_ns, rabi_max_duration_ns,
-        rabi_duration_step_ns, rabi_num_shots,
-        ramsey_min_wait_ns, ramsey_max_wait_ns,
-        ramsey_num_points, ramsey_artificial_detuning_hz, ramsey_num_shots,
-        ge_spec_frequency_span_mhz, ge_spec_frequency_step_mhz,
-        ge_spec_operation_len_ns, ge_spec_num_shots,
-        ge_ramsey_min_wait_ns, ge_ramsey_max_wait_ns,
-        ge_ramsey_num_points, ge_ramsey_frequency_detuning_mhz, ge_ramsey_num_shots,
-        ef_spec_frequency_span_mhz, ef_spec_frequency_step_mhz,
-        ef_spec_operation_len_ns, ef_spec_num_shots,
-        ef_ramsey_min_wait_ns, ef_ramsey_max_wait_ns,
-        ef_ramsey_num_points, ef_ramsey_frequency_detuning_mhz, ef_ramsey_num_shots,
-        fock_cavity_reset_type
+    Reads ``qubits``, ``mode_name``, and ``sideband_level`` from
+    ``graph.parameters``; all other node parameters are hardcoded.
     """
     p = graph.parameters
 

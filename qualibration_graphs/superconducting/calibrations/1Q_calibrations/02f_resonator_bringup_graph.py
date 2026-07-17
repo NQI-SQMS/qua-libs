@@ -31,7 +31,7 @@ class ResonatorBringUpParameters(GraphParameters):
 
 
 with QualibrationGraph.build(
-    "resonator_optimization",
+    "resonator_bringup_graph",
     parameters=ResonatorBringUpParameters(),
 ) as graph:
     resonator_bringup = build_resonator_bringup(graph, library)

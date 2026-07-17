@@ -12,26 +12,16 @@ Setting ``sideband_level = N`` calibrates the f|N-1>g|N> transition (1-based):
 
 The calibration chain for the selected level is:
 
-  f{k}g{k+1}_spectroscopy
-  -> f{k}g{k+1}_time_rabi
-  -> f{k}g{k+1}_ramsey          (sideband frequency fine-tuning)
-  -> f{k}g{k+1}_ge_spectroscopy (qubit GE frequency shift in Fock |k>)
-  -> f{k}g{k+1}_ge_ramsey       (precise qubit GE frequency at Fock |k>)
-  -> f{k}g{k+1}_ef_spectroscopy (qubit EF frequency shift in Fock |k>)
-  -> f{k}g{k+1}_ef_ramsey       (Kerr-corrected EF frequency)
-
-For levels k > 0, lower-level transitions (f0g1 … f{k-1}g{k}) must already
-be calibrated in the machine state so that the Fock-state preparation works.
-
-Note: ``sideband_level`` controls the graph structure at build time.
-Changing it after the library is loaded has no effect until the library
-is reloaded (i.e., this file is re-executed).
+  fNgN1_spectroscopy
+  -> fNgN1_time_rabi
+  -> fNgN1_ramsey          (sideband frequency fine-tuning)
+  -> fNgN1_ge_spectroscopy (qubit GE frequency shift in Fock |k>)
+  -> fNgN1_ef_spectroscopy (qubit EF frequency shift in Fock |k>)
 """
 
 from typing import List
 
 from qualibrate import GraphParameters, QualibrationGraph, QualibrationLibrary
-from calibration_utils.bringup_graphs import build_sideband_bringup
 
 library = QualibrationLibrary.get_active_library()
 
@@ -51,8 +41,73 @@ with QualibrationGraph.build(
     "sideband_bringup_graph",
     parameters=SidebandBringUpParameters(),
 ) as graph:
-    sideband_bringup = build_sideband_bringup(graph, library)
-    graph.add_node(sideband_bringup)
+
+    k = graph.parameters.sideband_level - 1
+    qubits = graph.parameters.qubits
+    mode = graph.parameters.mode_name
+
+    n_spec = library.nodes["26_fNgN1_spectroscopy"].copy(
+        name="fNgN1_spectroscopy",
+        qubits=qubits,
+        mode_name=mode,
+        fock_level=k,
+        frequency_span_in_mhz=10.0,
+        frequency_step_in_mhz=0.05,
+        operation_amplitude_factor=1.0,
+        operation_len_in_ns=20_000,
+        num_shots=500,
+    )
+    n_rabi = library.nodes["26b_fNgN1_time_rabi"].copy(
+        name="fNgN1_time_rabi",
+        qubits=qubits,
+        mode_name=mode,
+        fock_level=k,
+        min_duration_ns=16,
+        max_duration_ns=20_000,
+        duration_step_ns=4,
+        num_shots=100,
+        cavity_thermalization_time_ns=200_000,
+    )
+    n_ramsey = library.nodes["26c_fNgN1_ramsey"].copy(
+        name="fNgN1_ramsey",
+        qubits=qubits,
+        mode_name=mode,
+        fock_level=k,
+        min_wait_ns=16,
+        max_wait_ns=5_000,
+        num_wait_points=101,
+        artificial_detuning_hz=1e6,
+        num_shots=200,
+    )
+    n_ge_spec = library.nodes["26e_fNgN1_qubit_ge_spectroscopy"].copy(
+        name="fNgN1_ge_spectroscopy",
+        qubits=qubits,
+        mode_name=mode,
+        fock_level=k,
+        frequency_span_in_mhz=5.0,
+        frequency_step_in_mhz=0.05,
+        operation_len_in_ns=20_000,
+        num_shots=300,
+        cavity_reset_type="thermal",
+    )
+    n_ef_spec = library.nodes["26g_fNgN1_qubit_ef_spectroscopy"].copy(
+        name="fNgN1_ef_spectroscopy",
+        qubits=qubits,
+        mode_name=mode,
+        fock_level=k,
+        frequency_span_in_mhz=5.0,
+        frequency_step_in_mhz=0.05,
+        operation_len_in_ns=20_000,
+        num_shots=300,
+        cavity_reset_type="thermal",
+    )
+    for node in [n_spec, n_rabi, n_ramsey, n_ge_spec, n_ef_spec]:
+        graph.add_node(node)
+
+    graph.connect(n_spec, n_rabi)
+    graph.connect(n_rabi, n_ramsey)
+    graph.connect(n_ramsey, n_ge_spec)
+    graph.connect(n_ge_spec, n_ef_spec)
 
 
 graph.run()
