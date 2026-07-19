@@ -14,7 +14,7 @@ Used by:
 """
 
 import logging
-from typing import List
+from typing import Dict, List, Optional
 
 from qualibrate import GraphParameters, QualibrationGraph, QualibrationLibrary, QualibrationNode
 
@@ -161,62 +161,39 @@ def should_repeat_displacement_vacuum(node: QualibrationNode, target: str) -> bo
 
 
 def should_restart_qubit_calibration(node, target: str) -> bool:
-    """Restart the full calibration subgraph if it failed.
-
-    This handles the NO_OSCILLATION case: the qubit frequency is now blacklisted
-    in temp_calibration, so the next spec_vs_power run will avoid it.
-
-    On success, the post-bringup x180 amplitude, qubit f_01, and RF_frequency are
-    saved to temp_calibration so that the x180 fine calibration can restore them if
-    its first Ramsey or time_rabi iteration fails.
-    """
+    """Restart the full calibration subgraph if it failed."""
     if node.outcomes.get(target) == "failed":
-        logger.info(
-            f"{target}: Qubit calibration failed; restarting frequency search."
-        )
-        # Mark as not yet successfully calibrated so x180 fine calibration can
-        # detect exhaustion if the outer loop never exits via the success path.
-        machine = _get_machine(node)
-        if machine is not None:
-            temp = _ensure_temp_calibration(machine, target)
-            temp.qubit_calibration_succeeded = False
+        logger.info(f"{target}: Qubit calibration failed; restarting frequency search.")
         return True
-    # Succeeded: snapshot the bringup result so fine calibration can roll back to it.
-    # IMPORTANT: _get_machine() returns the first non-None machine found in
-    # _elements (insertion order: spec_vs_power → qubit_spec → time_rabi).
-    # spec_vs_power's machine was loaded before time_rabi ran, so its x180
-    # amplitude is stale (pre-calibration).  We must read the amplitude from
-    # the time_rabi node's machine, which was updated by update_state.
-    _pr_elem = getattr(node, "_elements", {}).get("time_rabi")
-    machine = (
-        _get_machine(_pr_elem)
-        if _pr_elem is not None
-        else _get_machine(node)
-    ) or _get_machine(node)
-    if machine is not None:
-        q = machine.qubits[target]
-        temp = _ensure_temp_calibration(machine, target)
-        temp.initial_x180_amplitude = float(q.xy.operations["x180"].amplitude)
-        temp.initial_qubit_f01 = float(q.f_01)
-        temp.initial_rf_frequency = float(q.xy.RF_frequency)
-        temp.qubit_calibration_succeeded = True
-        logger.info(
-            f"[Qubit bringup] {target}: Saved fine-calibration backup – "
-            f"x180={1e3 * temp.initial_x180_amplitude:.2f} mV, "
-            f"f_01={temp.initial_qubit_f01 / 1e9:.6f} GHz."
-        )
-        # Persist the backup to disk immediately.  The condition function runs
-        # after the last node's node.save(), so without this explicit call the
-        # backup would only live in memory and would be lost when the next
-        # graph.run() loads the machine fresh from state.json.
-        try:
-            machine.save()
-        except Exception as exc:
-            logger.warning(
-                f"[Qubit bringup] {target}: machine.save() after backup failed: {exc}"
-            )
     logger.info(f"{target}: Qubit calibration succeeded.")
     return False
+
+
+def _resolve_x180_fine_params(qubit_calibration_node, qubit: str) -> dict:
+    """Inject the post-bringup x180/frequency snapshot into x180_fine_calibration.
+
+    Called by the framework for each qubit after qubit_calibration completes,
+    before x180_fine_calibration starts.  Reads from the time_rabi child machine
+    (not spec_vs_power, which is stale) so the amplitude reflects the calibrated
+    value written by time_rabi's update_state.
+    """
+    time_rabi_elem = getattr(qubit_calibration_node, "_elements", {}).get("time_rabi")
+    machine = (
+        _get_machine(time_rabi_elem) if time_rabi_elem is not None
+        else _get_machine(qubit_calibration_node)
+    )
+    if machine is None:
+        return {}
+    q = machine.qubits.get(qubit)
+    if q is None:
+        return {}
+    succeeded = qubit_calibration_node.outcomes.get(qubit) != "failed"
+    return {
+        "initial_x180_amplitude": float(q.xy.operations["x180"].amplitude),
+        "initial_qubit_f01": float(q.f_01),
+        "initial_rf_frequency": float(q.xy.RF_frequency),
+        "qubit_calibration_succeeded": succeeded,
+    }
 
 
 # ── Subgraph builders ─────────────────────────────────────────────────────────
@@ -421,12 +398,6 @@ def _ensure_temp_calibration(machine, qubit_name: str):
     if qubit_name not in machine.temp_calibration:
         machine.temp_calibration[qubit_name] = TemporaryCalibrationData()
     temp = machine.temp_calibration[qubit_name]
-    for field in (
-        "initial_x180_amplitude", "initial_qubit_f01", "initial_rf_frequency",
-        "qubit_calibration_succeeded",   # True=OK, False=exhausted, None=unknown
-    ):
-        if not hasattr(temp, field):
-            object.__setattr__(temp, field, None)
     return temp
 
 
@@ -450,14 +421,6 @@ def _restore_initial_state(machine, target: str, loop_state: dict) -> None:
         f"[X180 fine] {target}: Restored x180={1e3 * loop_state['initial_x180_amplitude'][target]:.2f} mV, "
         f"f_01={loop_state['initial_f01'][target] / 1e9:.6f} GHz."
     )
-    temp = (machine.temp_calibration or {}).get(target)
-    if temp is not None:
-        if hasattr(temp, "initial_x180_amplitude"):
-            temp.initial_x180_amplitude = None
-        if hasattr(temp, "initial_qubit_f01"):
-            temp.initial_qubit_f01 = None
-        if hasattr(temp, "initial_rf_frequency"):
-            temp.initial_rf_frequency = None
     # Persist the restored state so the JSON file reflects the rollback.
     # The Ramsey node already called machine.save() with modified frequencies;
     # without this call those would survive in state.json.
@@ -469,6 +432,10 @@ def _restore_initial_state(machine, target: str, loop_state: dict) -> None:
 
 class _X180FineCalibrationSubgraphParameters(GraphParameters):
     qubits: List[str] = ["q0"]
+    initial_x180_amplitude: Optional[float] = None
+    initial_qubit_f01: Optional[float] = None
+    initial_rf_frequency: Optional[float] = None
+    qubit_calibration_succeeded: Optional[bool] = None
 
 
 class _RabiRamseySubgraphParameters(GraphParameters):
@@ -514,41 +481,39 @@ def build_x180_fine_calibration(
         q = machine.qubits[target]
 
         if not _loop_state["initialized"].get(target, False):
-            temp = _ensure_temp_calibration(machine, target)
+            # Read the snapshot injected by _resolve_x180_fine_params via resolve_params.
+            sg_params = x180_fine_calibration.parameters
+            x180_amp = sg_params.initial_x180_amplitude
+            succeeded = sg_params.qubit_calibration_succeeded
 
             # Guard: qubit_calibration exhausted all iterations without success.
-            # qubit_calibration_succeeded is set to False on every failed attempt
-            # and True only when qubit_calibration exits via the success path.
-            if getattr(temp, "qubit_calibration_succeeded", None) is False:
+            if succeeded is False:
                 logger.warning(
                     f"[X180 fine] {target}: Qubit calibration exhausted all iterations "
                     "without success — skipping x180 fine calibration entirely."
                 )
                 return False
 
-            if temp.initial_x180_amplitude is not None:
-                _loop_state["initial_x180_amplitude"][target] = temp.initial_x180_amplitude
-                _loop_state["initial_x90_amplitude"][target] = temp.initial_x180_amplitude / 2
-                _loop_state["initial_f01"][target] = temp.initial_qubit_f01 or float(q.f_01)
-                # Use the RF_frequency snapshotted at bringup; fall back to current if absent.
-                if hasattr(temp, "initial_rf_frequency") and temp.initial_rf_frequency is not None:
-                    _loop_state["initial_rf_frequency"][target] = temp.initial_rf_frequency
-                else:
-                    _loop_state["initial_rf_frequency"][target] = float(q.xy.RF_frequency)
+            if x180_amp is not None:
+                _loop_state["initial_x180_amplitude"][target] = x180_amp
+                _loop_state["initial_x90_amplitude"][target] = x180_amp / 2
+                _loop_state["initial_f01"][target] = sg_params.initial_qubit_f01 or float(q.f_01)
+                _loop_state["initial_rf_frequency"][target] = (
+                    sg_params.initial_rf_frequency or float(q.xy.RF_frequency)
+                )
+                logger.info(
+                    f"[X180 fine] {target}: Bringup snapshot loaded – "
+                    f"x180={1e3 * x180_amp:.2f} mV, "
+                    f"f_01={_loop_state['initial_f01'][target] / 1e9:.6f} GHz."
+                )
             else:
-                _loop_state["initial_x180_amplitude"][target] = float(q.xy.operations["x180"].amplitude)
-                _loop_state["initial_x90_amplitude"][target] = float(q.xy.operations["x90"].amplitude)
-                _loop_state["initial_f01"][target] = float(q.f_01)
-                _loop_state["initial_rf_frequency"][target] = float(q.xy.RF_frequency)
-                temp.initial_x180_amplitude = _loop_state["initial_x180_amplitude"][target]
-                temp.initial_qubit_f01 = _loop_state["initial_f01"][target]
+                # Standalone run or no resolver — disable restore-on-failure.
+                for key in ("initial_x180_amplitude", "initial_x90_amplitude",
+                            "initial_f01", "initial_rf_frequency"):
+                    _loop_state[key].pop(target, None)
+                logger.info(f"[X180 fine] {target}: No bringup snapshot; restore-on-failure disabled.")
             _loop_state["detuning_history"][target] = []
             _loop_state["initialized"][target] = True
-            logger.info(
-                f"[X180 fine] {target}: Initial state captured – "
-                f"x180={1e3 * _loop_state['initial_x180_amplitude'][target]:.2f} mV, "
-                f"f_01={_loop_state['initial_f01'][target] / 1e9:.6f} GHz."
-            )
 
         if node.outcomes.get(target) == "failed":
             logger.warning(
@@ -592,14 +557,6 @@ def build_x180_fine_calibration(
                 f"[X180 fine] {target}: Converged after "
                 f"{len(_loop_state['detuning_history'][target])} iteration(s)."
             )
-            temp = (machine.temp_calibration or {}).get(target)
-            if temp is not None:
-                if hasattr(temp, "initial_x180_amplitude"):
-                    temp.initial_x180_amplitude = None
-                if hasattr(temp, "initial_qubit_f01"):
-                    temp.initial_qubit_f01 = None
-                if hasattr(temp, "initial_rf_frequency"):
-                    temp.initial_rf_frequency = None
             _loop_state["initialized"][target] = False
             return False
 

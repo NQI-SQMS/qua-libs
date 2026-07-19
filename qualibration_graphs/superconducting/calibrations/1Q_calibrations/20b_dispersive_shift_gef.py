@@ -226,8 +226,10 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             if node.outcomes[q.name] == "failed":
                 continue
             res = node.results["fit_results"][q.name]
-            # Set readout to f_resonator(|e⟩) for maximum |g⟩/|e⟩ contrast
-            q.resonator.RF_frequency = res["f_optimal"]
+            # Store the delta from the GE readout frequency to the GEF-optimal frequency.
+            # RF_frequency stays at the GE operating point; GEF_frequency_shift is applied
+            # only when three-state discrimination is needed (nodes 14, 14b, 14c, 15, etc.).
+            q.resonator.GEF_frequency_shift = res["f_optimal"] - q.resonator.RF_frequency
             # Store chi_ge if attribute exists
             if hasattr(q, "chi"):
                 q.chi = res["chi_ge_hz"]

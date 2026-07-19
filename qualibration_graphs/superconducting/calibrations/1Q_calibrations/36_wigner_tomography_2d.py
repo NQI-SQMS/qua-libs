@@ -158,7 +158,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     n_fock = node.parameters.target_fock_level
 
     # D-SNAP pre-computation (Python time)
-    snap_amp_scales = None
+    displacement_scales = None
     snap_qubit_ifs = None
     if prep_method == "snap_displacement":
         photons = node.parameters.snap_displacement_photons
@@ -168,7 +168,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 f"(for target_fock_level={n_fock}). Got: {photons}"
             )
         _AMP_MAX = 2.0 - 2 ** -16
-        snap_amp_scales = []
+        displacement_scales = []
         for k, ph in enumerate(photons):
             s = ph / alpha_max
             if abs(s) > _AMP_MAX:
@@ -176,7 +176,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     f"snap_displacement_photons[{k}]={ph} / alpha_max={alpha_max} "
                     f"= {s:.4f} exceeds the QUA hardware limit ±{_AMP_MAX:.6f}."
                 )
-            snap_amp_scales.append(float(s))
+            displacement_scales.append(float(s))
         snap_qubit_ifs = [_ge_if_at_fock(pair, qubit, k) for k in range(n_fock)]
 
     n_avg = node.parameters.num_shots
@@ -231,25 +231,27 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     if prep_method == "sideband":
                         if n_fock > 0:
                             _fock_prep_qua(n_fock, pair, qubit, sb_drive)
-                        # After sideband prep, align and set qubit freq to n_fock level
+                        # Return to bare qubit frequency (n=0) for parity Ramsey
                         align()
-                        qubit.xy.update_frequency(_ge_if_at_fock(pair, qubit, n_fock))
+                        qubit.xy.update_frequency(_ge_if_at_fock(pair, qubit, 0))
 
                     else:  # snap_displacement
                         for k in range(n_fock):
                             cavity_mode.cavity_mode_drive.play(
-                                "displacement", amplitude_scale=snap_amp_scales[k]
+                                "displacement", amplitude_scale=displacement_scales[k]
                             )
                             align(qubit.xy.name, cav_drive_name)
                             qubit.xy.update_frequency(snap_qubit_ifs[k])
-                            qubit.xy.play("selective_x180")
-                            qubit.xy.play("selective_x180")
+                            with strict_timing_():
+                                qubit.xy.play("selective_x180")
+                                qubit.xy.play("selective_x180")
                             align(qubit.xy.name, cav_drive_name)
                         cavity_mode.cavity_mode_drive.play(
-                            "displacement", amplitude_scale=snap_amp_scales[n_fock]
+                            "displacement", amplitude_scale=displacement_scales[n_fock]
                         )
                         align()
-                        qubit.xy.update_frequency(_ge_if_at_fock(pair, qubit, n_fock))
+                        # Return to bare qubit frequency (n=0) for parity Ramsey
+                        qubit.xy.update_frequency(_ge_if_at_fock(pair, qubit, 0))
 
                     # 3. Probe displacement D(−β_k)
                     align(cav_drive_name, qubit.xy.name)

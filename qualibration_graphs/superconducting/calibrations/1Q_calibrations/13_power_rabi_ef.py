@@ -263,11 +263,17 @@ def update_state(node: QualibrationNode[EfParameters, Quam]):
             else:
                 op = q.xy.operations[node.parameters.operation]
                 op.amplitude = node.results["fit_results"][q.name]["opt_amp"]
-                if node.parameters.operation == "EF_x180" and "selective_EF_x180" in q.xy.operations:
-                    try:
-                        q.xy.operations["selective_EF_x180"].amplitude = op.amplitude / 100
-                    except (ValueError, KeyError, AttributeError):
-                        pass
+                if node.parameters.operation == "EF_x180":
+                    if "EF_x90" in q.xy.operations:
+                        try:
+                            q.xy.operations["EF_x90"].amplitude = op.amplitude / 2
+                        except (ValueError, KeyError, AttributeError):
+                            pass
+                    if "selective_EF_x180" in q.xy.operations:
+                        try:
+                            q.xy.operations["selective_EF_x180"].amplitude = op.amplitude / 100
+                        except (ValueError, KeyError, AttributeError):
+                            pass
 
 
 # %% {Save_results}

@@ -62,8 +62,7 @@ def plot_individual_fidelity_map(ax: Axes, ds_fit: xr.Dataset, qubit: dict[str, 
     best_freq_ghz = 1e-9 * float(ds_q.full_freq.sel(detuning=ds_q["optimal_detuning"], method="nearest"))
     best_amp_mv = 1e3 * float(ds_q.readout_amplitude.sel(amp_prefactor=ds_q["optimal_amp_prefactor"], method="nearest"))
     best_fidelity = float(
-        ds_q.fit_data.sel(
-            fit_vals="meas_fidelity",
+        ds_q.fidelity_ge.sel(
             detuning=ds_q["optimal_detuning"],
             amp_prefactor=ds_q["optimal_amp_prefactor"],
             method="nearest",

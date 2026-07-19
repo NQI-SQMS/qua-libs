@@ -30,9 +30,6 @@ class TemporaryCalibrationData(QuamBase):
     initial_resonator_RF_frequency: Optional[float] = None
 
     # ── x180 / qubit rollback values ─────────────────────────────────────────
-    initial_x180_amplitude: Optional[float] = None
-    initial_qubit_f01: Optional[float] = None
-    initial_rf_frequency: Optional[float] = None
     initial_x180_length_ns: Optional[float] = None
 
     # ── Spectroscopy result ───────────────────────────────────────────────────
@@ -90,5 +87,13 @@ class Quam(CavityQuam, FixedFrequencyQuam):
                     (tuple(src) if isinstance(src, list) else src, dst)
                     for src, dst in oct_data.get("loopbacks", [])
                 ]
+
+        # Strip fields removed from TemporaryCalibrationData so that older
+        # state.json files (written before the migration) load without error.
+        _removed_temp_fields = ("initial_x180_amplitude", "initial_qubit_f01", "initial_rf_frequency")
+        for tc_entry in (contents.get("temp_calibration") or {}).values():
+            if isinstance(tc_entry, dict):
+                for _f in _removed_temp_fields:
+                    tc_entry.pop(_f, None)
 
         return super().load(contents, **kwargs)

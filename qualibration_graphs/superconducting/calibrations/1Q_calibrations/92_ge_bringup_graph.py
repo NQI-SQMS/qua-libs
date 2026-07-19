@@ -49,6 +49,7 @@ from calibration_utils.bringup_graphs import (
     build_x180_fine_calibration,
     build_ge_readout_optimization,
     should_restart_qubit_calibration,
+    _resolve_x180_fine_params,
 )
 
 
@@ -128,7 +129,8 @@ with QualibrationGraph.build(
 
     # ── Execution order ────────────────────────────────────────────────────────
     graph.connect(resonator_bringup, qubit_calibration)
-    graph.connect(qubit_calibration, x180_fine_calibration)
+    graph.connect(qubit_calibration, x180_fine_calibration,
+                  resolve_params=_resolve_x180_fine_params)
     graph.connect(x180_fine_calibration, t1)
     graph.connect(t1, ge_readout_opt)
 

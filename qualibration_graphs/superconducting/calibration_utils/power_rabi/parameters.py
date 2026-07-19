@@ -48,9 +48,9 @@ class EfNodeSpecificParameters(BasePowerRabiParameters):
 
     operation: str = "EF_x180"
     """Name of the QUAM operation (pulse) to calibrate on the EF transition. Default is 'EF_x180'.
-    Can be any EF operation defined in qubit.xy.operations, e.g. 'selective_ef_x180'.
+    Can be any EF operation defined in qubit.xy.operations, e.g. 'selective_EF_x180'.
     When set to 'EF_x180', the drive frequency is automatically shifted to the EF transition
-    before the pulse and back to GE afterwards. For other operations (e.g. selective_ef_x180)
+    before the pulse and back to GE afterwards. For other operations (e.g. selective_EF_x180)
     that are already defined at the correct frequency, no frequency update is performed."""
 
 

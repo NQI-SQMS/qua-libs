@@ -12,19 +12,20 @@ for every qubit, or until ``max_iterations`` is reached.
 Failure handling:
   - If either fit fails for any qubit, the loop stops immediately and the
     pre-graph x180 amplitude and qubit frequency are restored from
-    ``temp_calibration.initial_x180_amplitude`` / ``initial_qubit_f01``.
+    ``graph.parameters.initial_x180_amplitude`` / ``initial_qubit_f01``.
 
 Notes:
   - The initial state is captured on the FIRST call to the condition function
     (i.e. after the first Rabi+Ramsey pair runs).  If that first run succeeds,
     "initial" corresponds to the post-first-iteration state; if it fails,
     update_state was not applied so the machine is still at the pre-graph state.
-  - To force a true pre-graph snapshot, set ``initial_x180_amplitude`` and
-    ``initial_qubit_f01`` in ``temp_calibration`` before starting the graph.
+  - To enable the restore-on-failure path for a standalone run, set
+    ``graph.parameters.initial_x180_amplitude`` and ``initial_qubit_f01``
+    directly before calling ``graph.run()``.
 """
 
 import logging
-from typing import List
+from typing import List, Optional
 
 from qualibrate import (
     GraphParameters,
@@ -45,6 +46,13 @@ class X180FineCalibrationParameters(GraphParameters):
 
     qubits: List[str] = test_qubits
     multiplexed: bool = False
+
+    # Optional bringup snapshot for rollback-on-failure.
+    # Set via resolve_params when chained after qubit_calibration, or manually
+    # before running the graph standalone to enable the restore-on-failure path.
+    initial_x180_amplitude: Optional[float] = None
+    initial_qubit_f01: Optional[float] = None
+    initial_rf_frequency: Optional[float] = None
 
     # Power Rabi
     rabi_min_amp_factor: float = 0.001
@@ -112,22 +120,6 @@ def _get_machine(node):
     return None
 
 
-def _ensure_temp_calibration(machine, qubit_name: str):
-    """Return TemporaryCalibrationData for *qubit_name*, creating it if absent."""
-    from quam_config.my_quam import TemporaryCalibrationData
-
-    if machine.temp_calibration is None:
-        machine.temp_calibration = {}
-    if qubit_name not in machine.temp_calibration:
-        machine.temp_calibration[qubit_name] = TemporaryCalibrationData()
-    temp = machine.temp_calibration[qubit_name]
-    # Backward-compatibility: add fields that older state.json files may omit
-    for field in ("initial_x180_amplitude", "initial_qubit_f01", "initial_rf_frequency"):
-        if not hasattr(temp, field):
-            object.__setattr__(temp, field, None)
-    return temp
-
-
 def _restore_initial_state(machine, target: str) -> None:
     """Restore x180/x90 amplitude and f_01/RF_frequency to their pre-loop values.
 
@@ -148,16 +140,6 @@ def _restore_initial_state(machine, target: str) -> None:
         f"[X180 fine] {target}: Restored x180={1e3 * _loop_state['initial_x180_amplitude'][target]:.2f} mV, "
         f"f_01={_loop_state['initial_f01'][target] / 1e9:.6f} GHz."
     )
-    # Clear stored initial values in temp_calibration so the next graph run
-    # captures a fresh baseline.
-    temp = (machine.temp_calibration or {}).get(target)
-    if temp is not None:
-        if hasattr(temp, "initial_x180_amplitude"):
-            temp.initial_x180_amplitude = None
-        if hasattr(temp, "initial_qubit_f01"):
-            temp.initial_qubit_f01 = None
-        if hasattr(temp, "initial_rf_frequency"):
-            temp.initial_rf_frequency = None
     # Persist the restored state so the JSON file reflects the rollback.
     # The Ramsey node already called machine.save() with modified frequencies;
     # without this call those would survive in state.json.
@@ -200,34 +182,30 @@ def should_repeat_x180_calibration(node: QualibrationNode, target: str) -> bool:
     q = machine.qubits[target]
 
     # ── Store initial state on first call for this qubit ─────────────────────
-    # At this point the first Rabi run may already have updated x180.amplitude
-    # and the first Ramsey may have updated f_01 (both only if successful).
-    # We use temp_calibration as an authoritative source when it is pre-populated.
+    # Read the snapshot from graph.parameters (set via resolve_params when
+    # chained after qubit_calibration, or set manually for standalone runs).
     if not _loop_state["initialized"].get(target, False):
-        temp = _ensure_temp_calibration(machine, target)
+        x180_amp = graph.parameters.initial_x180_amplitude
 
-        if temp.initial_x180_amplitude is not None:
-            # Bringup backup is available — load it for possible Rabi-failure restore.
-            _loop_state["initial_x180_amplitude"][target] = temp.initial_x180_amplitude
-            _loop_state["initial_x90_amplitude"][target] = temp.initial_x180_amplitude / 2
-            _loop_state["initial_f01"][target] = temp.initial_qubit_f01 or float(q.f_01)
-            if hasattr(temp, "initial_rf_frequency") and temp.initial_rf_frequency is not None:
-                _loop_state["initial_rf_frequency"][target] = temp.initial_rf_frequency
-            else:
-                _loop_state["initial_rf_frequency"][target] = float(q.xy.RF_frequency)
+        if x180_amp is not None:
+            _loop_state["initial_x180_amplitude"][target] = x180_amp
+            _loop_state["initial_x90_amplitude"][target] = x180_amp / 2
+            _loop_state["initial_f01"][target] = graph.parameters.initial_qubit_f01 or float(q.f_01)
+            _loop_state["initial_rf_frequency"][target] = (
+                graph.parameters.initial_rf_frequency or float(q.xy.RF_frequency)
+            )
             logger.info(
-                f"[X180 fine] {target}: Bringup backup loaded – "
-                f"x180={1e3 * _loop_state['initial_x180_amplitude'][target]:.2f} mV, "
+                f"[X180 fine] {target}: Bringup snapshot loaded – "
+                f"x180={1e3 * x180_amp:.2f} mV, "
                 f"f_01={_loop_state['initial_f01'][target] / 1e9:.6f} GHz "
                 f"(will restore if power_rabi fails)."
             )
         else:
-            # No bringup backup available; restore-on-failure is disabled.
-            # Clear any stale _loop_state entries from a previous run.
+            # No snapshot available; restore-on-failure is disabled.
             for key in ("initial_x180_amplitude", "initial_x90_amplitude",
                         "initial_f01", "initial_rf_frequency"):
                 _loop_state[key].pop(target, None)
-            logger.info(f"[X180 fine] {target}: No bringup backup found; restore-on-failure disabled.")
+            logger.info(f"[X180 fine] {target}: No bringup snapshot; restore-on-failure disabled.")
         _loop_state["detuning_history"][target] = []
         _loop_state["initialized"][target] = True
 
@@ -291,14 +269,6 @@ def should_repeat_x180_calibration(node: QualibrationNode, target: str) -> bool:
 
     if abs_offset < graph.parameters.freq_threshold_hz:
         logger.info(f"[X180 fine] {target}: Converged after {len(_loop_state['detuning_history'][target])} iteration(s).")
-        temp = (machine.temp_calibration or {}).get(target)
-        if temp is not None:
-            if hasattr(temp, "initial_x180_amplitude"):
-                temp.initial_x180_amplitude = None
-            if hasattr(temp, "initial_qubit_f01"):
-                temp.initial_qubit_f01 = None
-            if hasattr(temp, "initial_rf_frequency"):
-                temp.initial_rf_frequency = None
         _loop_state["initialized"][target] = False
         return False  # Converged
 

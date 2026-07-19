@@ -179,7 +179,7 @@ with QualibrationGraph.build(
 
     selective_ef_rabi = library.nodes["13_power_rabi_ef"].copy(
         name="selective_ef_rabi",
-        operation="selective_ef_x180",
+        operation="selective_EF_x180",
         min_amp_factor=0.001,
         max_amp_factor=1.99,
         amp_factor_step=0.01,
