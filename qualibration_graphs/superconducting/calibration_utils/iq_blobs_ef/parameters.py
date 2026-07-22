@@ -1,3 +1,5 @@
+"""Parameter definitions for IQ blobs GEF calibration experiment."""
+
 from typing import Literal
 from qualibrate import NodeParameters
 from qualibrate.core.parameters import RunnableParameters
@@ -5,14 +7,12 @@ from qualibration_libs.parameters import QubitsExperimentNodeParameters, CommonN
 
 
 class NodeSpecificParameters(RunnableParameters):
+    """IQ blobs GEF specific parameters for three-state measurement."""
+
     num_shots: int = 2000
     """Number of runs to perform. Default is 2000."""
-    operation: Literal["readout", "readout_QND"] = "readout"
-    """Type of operation to perform. Default is "readout"."""
-    ge_pi_pulse: str = "x180"
-    """Name of the ge pi pulse operation. Default is "x180"."""
-    ef_pi_pulse: str = "EF_x180"
-    """Name of the ef pi pulse operation. Default is "EF_x180"."""
+    operation: Literal["readout", "readout_QND", "readout_GEF"] = "readout_GEF"
+    """Type of operation to perform. Default is "readout_GEF"."""
 
 
 class Parameters(
@@ -21,4 +21,6 @@ class Parameters(
     NodeSpecificParameters,
     QubitsExperimentNodeParameters,
 ):
+    """Combined parameters for IQ blobs GEF calibration node."""
+
     pass

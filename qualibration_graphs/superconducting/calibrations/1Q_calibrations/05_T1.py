@@ -6,6 +6,7 @@ import xarray as xr
 from qm.qua import *
 
 from qualang_tools.multi_user import qm_session
+from qualang_tools.units import unit
 from qualang_tools.results import progress_counter
 
 from qualibrate import QualibrationNode
@@ -20,9 +21,6 @@ from calibration_utils.T1 import (
     log_fitted_results,
     plot_raw_data_with_fit,
 )
-
-#TODO: make it adaptive to avoid fails
-
 
 # %% {Node initialisation}
 description = """
@@ -46,6 +44,7 @@ node = QualibrationNode[Parameters, Quam](
     name="05_T1",  # Name should be unique
     description=description,  # Describe what the node is doing, which is also reflected in the QUAlibrate GUI
     parameters=Parameters(),  # Node parameters defined under quam_experiment/experiments/node_name
+    machine=Quam.load(),
 )
 
 
@@ -58,14 +57,12 @@ def custom_param(node: QualibrationNode[Parameters, Quam]):
     pass
 
 
-# Instantiate the QUAM class from the state file
-node.machine = Quam.load()
-
-
 # %% {Create_QUA_program}
 @node.run_action(skip_if=node.parameters.load_data_id is not None)
 def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     """Create the sweep axes and generate the QUA program from the pulse sequence and the node parameters."""
+    # Class containing tools to help handle units and conversions.
+    u = unit(coerce_to_integer=True)
     # Get the active qubits from the node and organize them by batches
     node.namespace["qubits"] = qubits = get_qubits(node)
     num_qubits = len(node.namespace["qubits"])
@@ -94,7 +91,6 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             with for_(n, 0, n < n_avg, n + 1):
                 save(n, n_st)
                 with for_each_(t, idle_times):
-                    # --- Reset ---
                     # Reset the qubits to the ground state
                     for i, qubit in multiplexed_qubits.items():
                         qubit.reset(
@@ -106,7 +102,6 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     # before any manipulation starts; also keeps shared resources (e.g. TWPA sticky elements) coherent.
                     align()
 
-                    # --- Qubit drive ---
                     # The qubit manipulation sequence
                     for i, qubit in multiplexed_qubits.items():
                         # Per-qubit timing: π pulse completes before the shared idle wait begins on this qubit.
@@ -117,25 +112,27 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     # No readout until all qubits have finished manipulation + wait for this idle_time step.
                     align()
 
-                    # --- Readout ---
                     # Measure the state of the resonators
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
                         if node.parameters.use_state_discrimination:
-                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
+                            qubit.readout_state(state[i])
                             save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
-
+                        else:
+                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
+                            # save data
+                            save(I[i], I_st[i])
+                            save(Q[i], Q_st[i])
+                    # End-of-segment barrier before the next sweep step (and before sticky/aux elements ramp down early).
                     align()
+
         with stream_processing():
             n_st.save("n")
             for i in range(num_qubits):
-                I_st[i].buffer(len(idle_times)).average().save(f"I{i + 1}")
-                Q_st[i].buffer(len(idle_times)).average().save(f"Q{i + 1}")
                 if node.parameters.use_state_discrimination:
                     state_st[i].buffer(len(idle_times)).average().save(f"state{i + 1}")
+                else:
+                    I_st[i].buffer(len(idle_times)).average().save(f"I{i + 1}")
+                    Q_st[i].buffer(len(idle_times)).average().save(f"Q{i + 1}")
 
 
 # %% {Simulate}
