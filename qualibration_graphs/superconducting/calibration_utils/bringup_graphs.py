@@ -1364,7 +1364,8 @@ def build_gef_readout_optimization(
 
     Sequence (all sequential, no retry loops)::
 
-        gef_readout_length_optimization  (14c)
+        gef_dispersive_shift  (20b)
+        → gef_readout_length_optimization  (14c)
         → gef_readout_frequency_optimization  (14)
         → gef_readout_power_optimization  (14b)
         → gef_iq_blobs  (15)
@@ -1375,6 +1376,14 @@ def build_gef_readout_optimization(
         "gef_readout_optimization",
         parameters=_GEFReadoutOptSubgraphParameters(),
     ) as gef_readout_opt:
+
+        gef_dispersive_shift = library.nodes["20b_dispersive_shift_gef"].copy(
+            name="gef_dispersive_shift",
+            num_shots=200,
+            frequency_span_in_mhz=5.0,
+            frequency_step_in_mhz=0.05,
+        )
+        gef_readout_opt.add_node(gef_dispersive_shift)
 
         gef_length_opt = library.nodes["14c_readout_gef_length_optimization"].copy(
             name="gef_readout_length_optimization",
@@ -1411,6 +1420,7 @@ def build_gef_readout_optimization(
         )
         gef_readout_opt.add_node(gef_iq_blobs)
 
+        gef_readout_opt.connect(gef_dispersive_shift, gef_length_opt)
         gef_readout_opt.connect(gef_length_opt, gef_freq_opt)
         gef_readout_opt.connect(gef_freq_opt, gef_power_opt)
         gef_readout_opt.connect(gef_power_opt, gef_iq_blobs)
