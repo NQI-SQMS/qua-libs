@@ -98,7 +98,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     qubit_roles_map = {}
     for qp in qubit_pairs:
         verify_moving_qubit(
-            qubit_pair=qp,
+            qp,
             operation=node.parameters.operation,
             repair_routing=True,
             log_callable=node.log,
