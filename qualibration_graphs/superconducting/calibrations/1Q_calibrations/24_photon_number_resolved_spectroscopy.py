@@ -114,6 +114,15 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     node.namespace["amplitude_scale"] = amplitude_scale
     node.namespace["sideband_drive"] = sideband_drive
 
+    displaced_threshold = None
+    if node.parameters.use_state_discrimination and node.parameters.use_displaced_threshold:
+        for _pk, _pv in pairs.items():
+            if _pk.endswith(f"_{mode_name}"):
+                _t = getattr(_pv, "ge_iq_threshold_displaced", None)
+                if _t is not None:
+                    displaced_threshold = float(_t)
+                break
+
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
         "detuning": xr.DataArray(
@@ -174,13 +183,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                         # Measure
                         align(qubit.xy.name, qubit.resonator.name)
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
-                        if node.parameters.use_state_discrimination:
-                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                            save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                        qubit.readout_state(
+                            state[i] if node.parameters.use_state_discrimination else None,
+                            I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                            state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                            threshold=displaced_threshold,
+                        )
 
                     align()
 

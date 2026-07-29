@@ -6,7 +6,8 @@ from qualibration_libs.parameters import QubitsExperimentNodeParameters, CommonN
 
 class NodeSpecificParameters(RunnableParameters):
     fock_level: int = 0
-    """Which sideband transition to calibrate (0=f0g1, 1=f1g2, ...). Internally prepares |fock_level+1⟩ photons."""
+    """Which sideband transition to calibrate (0=f0g1, 1=f1g2, ...). Internally prepares |fock_level+1⟩ photons.
+    Ignored when preparation_type='displacement'."""
     num_shots: int = 200
     """Number of averages."""
     mode_name: str = "alice"
@@ -28,6 +29,13 @@ class NodeSpecificParameters(RunnableParameters):
     sideband_pulse_duration_ns: Optional[int] = None
     """Override the sideband pulse flat-top duration [ns] during active cooling.
     When None, the calibrated pi_flat_top_length_ns from pair.transitions is used."""
+    preparation_type: Literal["sideband", "displacement"] = "sideband"
+    """How to prepare the cavity state before measuring the resonator.
+    'sideband'    - Fock |fock_level+1⟩ via the standard sideband ladder (default).
+    'displacement' - coherent state |α⟩ via a single displacement pulse."""
+    displacement_alpha: float = 1.0
+    """Desired coherent-state amplitude α for preparation_type='displacement'.
+    amplitude_scale = displacement_alpha / displacement_alpha_max from QuAM state."""
 
 
 class Parameters(

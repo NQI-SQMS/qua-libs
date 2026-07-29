@@ -47,6 +47,9 @@ class NodeSpecificParameters(RunnableParameters):
     matching the original behaviour with no cross-Kerr correction."""
     use_state_discrimination: bool = True
     """True → measure qubit state (0/1). False → measure raw I quadrature."""
+    use_displaced_threshold: bool = False
+    """When True and use_state_discrimination is True, use pair.ge_iq_threshold_displaced
+    instead of the vacuum readout threshold (calibrated by node 26j)."""
     use_confusion_matrix_correction: bool = False
     """Apply ge confusion matrix correction to averaged state probabilities."""
     target_n_sigma: float = 5.0

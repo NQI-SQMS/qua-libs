@@ -68,6 +68,9 @@ class NodeSpecificParameters(RunnableParameters):
     use_state_discrimination: bool = True
     """True → use qubit threshold for 0/1 classification.
     False → use raw I quadrature (not recommended for Wigner tomography)."""
+    use_displaced_threshold: bool = False
+    """When True and use_state_discrimination is True, use pair.ge_iq_threshold_displaced
+    instead of the vacuum readout threshold (calibrated by node 26j)."""
 
     use_confusion_matrix_correction: bool = False
     """Apply ge readout confusion matrix correction to averaged
@@ -84,6 +87,47 @@ class NodeSpecificParameters(RunnableParameters):
     """How to reset the cavity between shots.
     'thermal'         - wait thermalization_time_factor × T1.
     'active_sideband' - cascade sideband pi-pulses to actively remove photons."""
+
+    fock_prep_protocol: Literal["sfo", "sfp", "sfp_pf"] = "sfo"
+    """Fock state preparation protocol (applies only when fock_prep_method='sideband'):
+
+    'sfo'     — plain sideband ladder, no mid-sequence correction (default, existing
+                behaviour).  No extra calibration required beyond sideband bringup.
+
+    'sfp'     — Sideband Fock Preparation with Feedforward: after each sideband step,
+                measure the qubit and retry if the transfer failed.  Requires node 37
+                (qubit_gef_thresholds) to calibrate 3-state IQ thresholds first.
+
+    'sfp_pf'  — SFP + Parity Filter: after the SFP ladder, a real-time parity Ramsey
+                verifies the prepared Fock parity; the program retries up to
+                pf_max_retries times before accepting the shot.  Requires node 37.
+    """
+
+    sfp_ff_repeat: int = 1
+    """[sfp / sfp_pf] Consecutive successful feedforward measurements required at each
+    sideband step before advancing.  1 = a single success suffices; increase to 2–3
+    for higher confidence at the cost of longer preparation time."""
+
+    sfp_max_retries: int = 20
+    """[sfp / sfp_pf] Hard cutoff on feedforward attempts per sideband step.
+    If this many GEF measurements pass without achieving ff_repeat consecutive
+    successes, the loop exits and preparation continues to the next step.
+    Prevents the program from blocking indefinitely when readout or sideband
+    calibration is imperfect.  Default 20 is ~10× the expected number of
+    retries for a well-calibrated system."""
+
+    pf_max_retries: int = 30
+    """[sfp_pf only] Maximum parity-filter retry attempts per shot.  If the loop
+    exhausts this count without passing, the shot proceeds with an improperly prepared
+    state, contributing as noise.  Increase for high-Fock targets where fidelity is
+    lower and more retries are expected."""
+
+    use_active_gef_qubit_reset: bool = True
+    """[sfp / sfp_pf only] Use qubit.reset_qubit_active_gef() instead of the
+    standard qubit.reset() between shots.  This is strongly recommended for SFP
+    because sideband operations can leave the qubit in |f⟩; a standard g/e active
+    reset cannot handle leakage and may flip |f⟩ → |e⟩ rather than |g⟩.
+    Set False only if gef_centers has not been calibrated (node 15)."""
 
     cavity_active_cooling_fock_n: int = 1
     """Starting Fock level for active sideband cavity reset (only used when

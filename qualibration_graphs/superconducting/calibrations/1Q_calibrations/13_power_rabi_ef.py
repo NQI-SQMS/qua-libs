@@ -150,17 +150,11 @@ def create_qua_program(node: QualibrationNode[EfParameters, Quam]):
                             qubit.resonator.update_frequency(
                                 int(qubit.resonator.intermediate_frequency + qubit.resonator.GEF_frequency_shift)
                             )
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
-                        if node.parameters.use_state_discrimination:
-                            qubit.resonator.update_frequency(qubit.resonator.intermediate_frequency)
-                            diff = declare(fixed, size=3)
-                            for p in range(3):
-                                assign(diff[p], Math.abs(I[i] - qubit.resonator.gef_centers[p][0]) + Math.abs(Q[i] - qubit.resonator.gef_centers[p][1]))
-                            assign(state[i], Math.argmin(diff))
-                            save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                        qubit.readout_state(
+                            state[i] if node.parameters.use_state_discrimination else None,
+                            I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                            state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                        )
                     align()
 
         with stream_processing():

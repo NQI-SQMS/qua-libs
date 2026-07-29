@@ -25,7 +25,6 @@ from calibration_utils.error_codes import (
     ResonatorPunchOutCorrectiveAction,
 )
 from quam_builder.tools.power_tools import calculate_voltage_scaling_factor
-from calibration_utils.power_lock import set_locked_output_power
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.runtime import simulate_and_plot
 from qualibration_libs.data import XarrayDataFetcher
@@ -184,7 +183,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     node.namespace["tracked_resonators"] = []
     for i, qubit in enumerate(qubits):
         with tracked_updates(qubit.resonator, auto_revert=False, dont_assign_to_none=True) as resonator:
-            set_locked_output_power(resonator, power_in_dbm=max_power_dbm)
+            resonator.set_locked_output_power(power_in_dbm=max_power_dbm)
             node.namespace["tracked_resonators"].append(resonator)
 
     # The readout amplitude sweep (as a pre-factor of the readout amplitude) - must be within [-2; 2)
@@ -427,7 +426,7 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             node.results["fit_results"][q.name]["action_magnitude"] = 0.0
 
             # Update the readout power
-            set_locked_output_power(q.resonator, power_in_dbm=fit_result["optimal_power"])
+            q.resonator.set_locked_output_power(power_in_dbm=fit_result["optimal_power"])
             # Set the resonator frequency directly to the measured low-power resonance.
             # This is more robust than incrementing by freq_shift, which can accumulate errors.
             freq_low_abs = fit_result["freq_low_abs"]

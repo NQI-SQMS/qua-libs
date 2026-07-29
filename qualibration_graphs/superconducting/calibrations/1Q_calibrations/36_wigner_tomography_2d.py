@@ -15,8 +15,6 @@ from qualibrate import QualibrationNode
 from calibration_utils.shared import (
     _get_cavity_mode,
     _get_pair_components,
-    _ge_if_at_fock,
-    _fock_prep_qua,
     apply_confusion_matrix_correction,
 )
 from calibration_utils.wigner_tomography_2d import (
@@ -135,6 +133,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
     chi_hz = float(pair.chi) if getattr(pair, "chi", None) is not None else 0.0
 
+    displaced_threshold = None
+    if node.parameters.use_state_discrimination and node.parameters.use_displaced_threshold:
+        _t = getattr(pair, "ge_iq_threshold_displaced", None)
+        if _t is not None:
+            displaced_threshold = float(_t)
+
     parity_time_ns = resolve_parity_time_ns(node)
     node.namespace["parity_time_ns"] = parity_time_ns
     parity_clk = parity_time_ns // 4  # QUA clock cycles (4 ns each)
@@ -156,6 +160,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
     prep_method = node.parameters.fock_prep_method
     n_fock = node.parameters.target_fock_level
+    protocol = node.parameters.fock_prep_protocol if prep_method == "sideband" else "sfo"
+    ff_repeat = node.parameters.sfp_ff_repeat
+    sfp_max_retries = node.parameters.sfp_max_retries
+    pf_max_retries = node.parameters.pf_max_retries
+    # Parity expected after the parity Ramsey for the target Fock level
+    expected_parity = "odd" if (n_fock % 2 == 1) else "even"
+    ge_readout_threshold = float(qubit.resonator.operations["readout"].threshold)
 
     # D-SNAP pre-computation (Python time)
     displacement_scales = None
@@ -177,10 +188,43 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     f"= {s:.4f} exceeds the QUA hardware limit ±{_AMP_MAX:.6f}."
                 )
             displacement_scales.append(float(s))
-        snap_qubit_ifs = [_ge_if_at_fock(pair, qubit, k) for k in range(n_fock)]
+        snap_qubit_ifs = [pair.ge_if_at_fock(qubit, k) for k in range(n_fock)]
 
     n_avg = node.parameters.num_shots
     cav_drive_name = cavity_mode.cavity_mode_drive.name
+
+    def _do_cavity_reset():
+        """Emit QUA cavity reset instructions (inline helper, avoids duplication)."""
+        if node.parameters.cavity_reset_type == "active_sideband":
+            cavity_mode.reset(
+                "active_sideband",
+                node.parameters.simulate,
+                log_callable=node.log,
+                sideband_drive=sb_drive,
+                qubit_thermalization_time=qubit.thermalization_time,
+                fock_n=node.parameters.cavity_active_cooling_fock_n,
+                sideband_pulse_duration_ns=node.parameters.sideband_pulse_duration_ns,
+                chi_hz=chi_hz,
+                pair=pair,
+            )
+        else:
+            cavity_mode.cavity_mode_drive.wait(therm_clk)
+
+    def _do_qubit_reset():
+        """Emit QUA qubit reset instructions.
+
+        For SFP/SFP+PF protocols, uses reset_qubit_active_gef() which handles
+        leakage to |f⟩ — critical because sideband operations can strand the
+        qubit outside the ge subspace.  Falls back to standard reset for SFO.
+        """
+        if protocol != "sfo" and node.parameters.use_active_gef_qubit_reset:
+            qubit.reset_qubit_active_gef()
+        else:
+            qubit.reset(
+                node.parameters.reset_type,
+                node.parameters.simulate,
+                log_callable=node.log,
+            )
 
     def _build_program(polarity: int):
         with program() as prog:
@@ -197,6 +241,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             state_st = declare_stream()
             n_st = declare_stream()
 
+            # Extra variables for SFP+PF parity filter loop
+            if protocol == "sfp_pf":
+                pf_accepted = declare(bool)
+                retry_count = declare(int)
+                I_pf = declare(fixed)
+
             node.machine.initialize_qpu(target=qubit)
 
             with for_(n, 0, n < n_avg, n + 1):
@@ -205,53 +255,62 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     assign(a_re, probe_re_arr[idx])
                     assign(a_im, probe_im_arr[idx])
 
-                    # 1. Reset cavity + reset qubit
-                    if node.parameters.cavity_reset_type == "active_sideband":
-                        cavity_mode.reset(
-                            "active_sideband",
-                            node.parameters.simulate,
-                            log_callable=node.log,
-                            sideband_drive=sb_drive,
-                            qubit_thermalization_time=qubit.thermalization_time,
-                            fock_n=node.parameters.cavity_active_cooling_fock_n,
-                            sideband_pulse_duration_ns=node.parameters.sideband_pulse_duration_ns,
-                            chi_hz=chi_hz,
-                            pair=pair,
-                        )
+                    # ----------------------------------------------------------------
+                    # Steps 1+2: Reset and Fock state preparation
+                    # ----------------------------------------------------------------
+                    if protocol == "sfp_pf":
+                        # Parity-filter loop: handles its own reset on each retry
+                        assign(pf_accepted, False)
+                        assign(retry_count, 0)
+                        with while_(~pf_accepted & (retry_count < pf_max_retries)):
+                            _do_cavity_reset()
+                            _do_qubit_reset()
+                            align()
+                            if n_fock > 0:
+                                pair.fock_prep_qua_sfp(n_fock, qubit, ff_repeat, sfp_max_retries)
+                            align()
+                            qubit.xy.update_frequency(pair.ge_if_at_fock(qubit, 0))
+                            pair.parity_filter_qua(qubit, expected_parity, I_pf, pf_accepted)
+                            assign(retry_count, retry_count + 1)
+
+                        # After the PF loop the qubit is projected; reset it to |g⟩
+                        # using the last measurement result — no extra measurement needed.
+                        qubit.xy.update_frequency(pair.ge_if_at_fock(qubit, 0))
+                        with if_(I_pf > ge_readout_threshold):
+                            qubit.xy.play("x180")
+                        align()
+
                     else:
-                        cavity_mode.cavity_mode_drive.wait(therm_clk)
-                    qubit.reset(
-                        node.parameters.reset_type,
-                        node.parameters.simulate,
-                        log_callable=node.log,
-                    )
-                    align()
-
-                    # 2. Fock state preparation
-                    if prep_method == "sideband":
-                        if n_fock > 0:
-                            _fock_prep_qua(n_fock, pair, qubit, sb_drive)
-                        # Return to bare qubit frequency (n=0) for parity Ramsey
+                        # SFO or SFP: outer reset then prep
+                        _do_cavity_reset()
+                        _do_qubit_reset()
                         align()
-                        qubit.xy.update_frequency(_ge_if_at_fock(pair, qubit, 0))
 
-                    else:  # snap_displacement
-                        for k in range(n_fock):
+                        if prep_method == "sideband":
+                            if n_fock > 0:
+                                if protocol == "sfp":
+                                    pair.fock_prep_qua_sfp(n_fock, qubit, ff_repeat, sfp_max_retries)
+                                else:  # sfo
+                                    pair.fock_prep_qua(n_fock, qubit)
+                            align()
+                            qubit.xy.update_frequency(pair.ge_if_at_fock(qubit, 0))
+
+                        else:  # snap_displacement
+                            for k in range(n_fock):
+                                cavity_mode.cavity_mode_drive.play(
+                                    "displacement", amplitude_scale=displacement_scales[k]
+                                )
+                                align(qubit.xy.name, cav_drive_name)
+                                qubit.xy.update_frequency(snap_qubit_ifs[k])
+                                with strict_timing_():
+                                    qubit.xy.play("selective_x180")
+                                    qubit.xy.play("selective_x180")
+                                align(qubit.xy.name, cav_drive_name)
                             cavity_mode.cavity_mode_drive.play(
-                                "displacement", amplitude_scale=displacement_scales[k]
+                                "displacement", amplitude_scale=displacement_scales[n_fock]
                             )
-                            align(qubit.xy.name, cav_drive_name)
-                            qubit.xy.update_frequency(snap_qubit_ifs[k])
-                            with strict_timing_():
-                                qubit.xy.play("selective_x180")
-                                qubit.xy.play("selective_x180")
-                            align(qubit.xy.name, cav_drive_name)
-                        cavity_mode.cavity_mode_drive.play(
-                            "displacement", amplitude_scale=displacement_scales[n_fock]
-                        )
-                        align()
-                        # Return to bare qubit frequency (n=0) for parity Ramsey
-                        qubit.xy.update_frequency(_ge_if_at_fock(pair, qubit, 0))
+                            align()
+                            qubit.xy.update_frequency(pair.ge_if_at_fock(qubit, 0))
 
                     # 3. Probe displacement D(−β_k)
                     align(cav_drive_name, qubit.xy.name)
@@ -268,7 +327,8 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     align()
                     qubit.resonator.measure("readout", qua_vars=(I, Q))
                     if node.parameters.use_state_discrimination:
-                        assign(state, Cast.to_int(I > qubit.resonator.operations["readout"].threshold))
+                        _thresh = displaced_threshold if displaced_threshold is not None else qubit.resonator.operations["readout"].threshold
+                        assign(state, Cast.to_int(I > _thresh))
                         save(state, state_st)
                     else:
                         assign(state, Cast.to_int(I > 0))
@@ -283,8 +343,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
     node.namespace["qua_program_plus"] = _build_program(polarity=+1)
     node.namespace["qua_program_minus"] = _build_program(polarity=-1)
-    node.log(f"QUA programs built — N_probe={N_probe}, parity_time={parity_time_ns} ns, "
-             f"prep='{prep_method}', Fock |{n_fock}⟩")
+    node.log(
+        f"QUA programs built — N_probe={N_probe}, parity_time={parity_time_ns} ns, "
+        f"prep='{prep_method}', protocol='{protocol}', Fock |{n_fock}⟩"
+    )
 
 
 # %% {Simulate}
@@ -440,9 +502,12 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
     parity = np.asarray(node.results["parity"]) if "parity" in node.results else None
     fidelity = node.results.get("fidelity")
 
+    _prep_label = node.parameters.fock_prep_method
+    if node.parameters.fock_prep_method == "sideband":
+        _prep_label = f"{node.parameters.fock_prep_method}/{node.parameters.fock_prep_protocol}"
     title_str = (
         f"mode={node.parameters.mode_name}, "
-        f"|{node.parameters.target_fock_level}⟩ via {node.parameters.fock_prep_method}"
+        f"|{node.parameters.target_fock_level}⟩ via {_prep_label}"
     )
 
     fig_disps = plot_wigner_disps(probe_disps, kappa, N_ph, N_exp, title=title_str)

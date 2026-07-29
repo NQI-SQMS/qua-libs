@@ -17,10 +17,7 @@ from qualibration_libs.data import XarrayDataFetcher
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.runtime import simulate_and_plot
 from quam_builder.architecture.superconducting.qubit_pair.cavity_transmon_pair import SidebandTransition
-from calibration_utils.shared import (
-    _get_pair_components,
-    _fock_prep_qua,
-)
+from calibration_utils.shared import _get_pair_components
 from calibration_utils.fNgN1_resonator_spectroscopy import (
     Parameters,
     fit_raw_data,
@@ -93,6 +90,24 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     pair, pair_qubit, sideband_drive, cav_mode = _get_pair_components(node)
     chi_hz = float(pair.chi) if (pair is not None and getattr(pair, "chi", None) is not None) else 0.0
 
+    # Resolve displacement amplitude scale (used when preparation_type='displacement')
+    _AMP_MAX = 2.0 - 2**-16
+    alpha_max = 1.0
+    pairs = getattr(node.machine, "cavity_transmon_pairs", {})
+    for pair_key, _pair in pairs.items():
+        if pair_key.endswith(f"_{node.parameters.mode_name}"):
+            if getattr(_pair, "displacement_alpha_max", None) is not None:
+                alpha_max = float(_pair.displacement_alpha_max)
+            break
+    amplitude_scale = node.parameters.displacement_alpha / alpha_max
+    if node.parameters.preparation_type == "displacement" and abs(amplitude_scale) > _AMP_MAX:
+        raise ValueError(
+            f"displacement_alpha={node.parameters.displacement_alpha} / "
+            f"alpha_max={alpha_max} = {amplitude_scale:.4f} exceeds the QUA "
+            f"hardware limit ±{_AMP_MAX:.6f}.  Reduce displacement_alpha."
+        )
+    node.namespace["amplitude_scale"] = amplitude_scale
+
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
         "detuning": xr.DataArray(
@@ -124,8 +139,14 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     for i, qubit in multiplexed_qubits.items():
                         rr = qubit.resonator
 
-                        # ── Fock measurement ──────────────────────────────
-                        _fock_prep_qua(k + 1, pair, qubit, sideband_drive)
+                        # ── State preparation ─────────────────────────────
+                        if node.parameters.preparation_type == "sideband":
+                            pair.fock_prep_qua(k + 1, qubit)
+                        else:
+                            cav_mode.cavity_mode_drive.play(
+                                "displacement",
+                                amplitude_scale=node.namespace["amplitude_scale"],
+                            )
                         align(qubit.xy.name, rr.name)
                         rr.update_frequency(df + rr.intermediate_frequency)
                         rr.measure("readout", qua_vars=(I[i], Q[i]))

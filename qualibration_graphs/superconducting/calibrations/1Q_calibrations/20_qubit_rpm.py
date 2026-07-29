@@ -116,12 +116,7 @@ def _make_rpm_program(qubits, amp_factors, num_qubits, n_avg, ef_op, u, start_fr
 
                         # Measure
                         align(qubit.xy.name, qubit.resonator.name)
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
-                        assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                        save(state[i], state_st[i])
-                        qubit.resonator.wait(node.machine.depletion_time // 4)
+                        qubit.readout_state(state[i], I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i], state_st=state_st[i])
 
                     align()
 

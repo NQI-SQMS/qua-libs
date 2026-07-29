@@ -16,8 +16,6 @@ from calibration_utils.shared import (
     apply_confusion_matrix_correction,
     _get_cavity_mode,
     _get_pair_components,
-    _fock_prep_qua,
-    _ge_if_at_fock,
 )
 from quam_config import Quam
 from qualibration_libs.parameters import get_qubits
@@ -171,8 +169,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                     # -- Fock |1> preparation via f0g1 sideband ladder --------
                     align()
-                    _fock_prep_qua(1, node.namespace["pair"], qubit,
-                                   node.namespace["sb_drive"])
+                    node.namespace["pair"].fock_prep_qua(1, qubit)
 
                     # -- Reset qubit to bare GE frequency (n=0) ---------------
                     align()
@@ -192,18 +189,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     # -- Measure -----------------------------------------------
                     for i, qubit in multiplexed_qubits.items():
                         align(qubit.xy.name, qubit.resonator.name)
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
-                        if node.parameters.use_state_discrimination:
-                            assign(
-                                state[i],
-                                Cast.to_int(
-                                    I[i] > qubit.resonator.operations["readout"].threshold
-                                ),
-                            )
-                            save(state[i], state_st[i])
-                        qubit.resonator.wait(node.machine.depletion_time // 4)
+                        qubit.readout_state(
+                            state[i] if node.parameters.use_state_discrimination else None,
+                            I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                            state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                        )
 
                     align()
         with stream_processing():

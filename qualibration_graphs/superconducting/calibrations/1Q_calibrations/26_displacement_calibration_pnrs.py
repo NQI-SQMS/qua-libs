@@ -15,7 +15,6 @@ from qualang_tools.units import unit
 from qualibrate import QualibrationNode
 from calibration_utils.shared import apply_confusion_matrix_correction, _get_cavity_mode
 from quam_builder.tools.power_tools import calculate_voltage_scaling_factor
-from calibration_utils.power_lock import set_locked_output_power
 from qualibration_libs.core import tracked_updates
 from quam_config import Quam
 from calibration_utils.displacement_calibration_pnrs import (
@@ -105,10 +104,19 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             break
     node.namespace["sideband_drive"] = sideband_drive
 
+    displaced_threshold = None
+    if node.parameters.use_state_discrimination and node.parameters.use_displaced_threshold:
+        for _pk, _pv in pairs.items():
+            if _pk.endswith(f"_{mode_name}"):
+                _t = getattr(_pv, "ge_iq_threshold_displaced", None)
+                if _t is not None:
+                    displaced_threshold = float(_t)
+                break
+
     # Set cavity drive to max power (tracked so it can be reverted after the experiment)
     node.namespace["tracked_drives"] = []
     with tracked_updates(cavity_mode.cavity_mode_drive, auto_revert=False, dont_assign_to_none=True) as cav_drive:
-        set_locked_output_power(cav_drive, power_in_dbm=node.parameters.max_power_dbm, operation="displacement")
+        cav_drive.set_locked_output_power(power_in_dbm=node.parameters.max_power_dbm, operation="displacement")
         node.namespace["tracked_drives"].append(cav_drive)
 
     # Amplitude prefactors: logarithmically spaced from min_power to max_power
@@ -187,13 +195,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                             # Measure
                             align(qubit.xy.name, qubit.resonator.name)
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
-                            if node.parameters.use_state_discrimination:
-                                assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                                save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                            qubit.readout_state(
+                                state[i] if node.parameters.use_state_discrimination else None,
+                                I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                                state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                                threshold=displaced_threshold,
+                            )
                         align()
 
         with stream_processing():
