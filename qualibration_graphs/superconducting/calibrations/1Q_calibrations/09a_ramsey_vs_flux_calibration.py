@@ -114,9 +114,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             align()
 
             for i, qubit in multiplexed_qubits.items():
-                qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                assign(init_state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                qubit.readout_state(init_state[i], I=I[i], Q=Q[i])
 
             align()
             with for_(n, 0, n < n_avg, n + 1):
@@ -142,11 +140,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                         # Qubit readout
                         for i, qubit in multiplexed_qubits.items():
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
-                            assign(current_state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                            qubit.readout_state(current_state[i], I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i])
                             assign(state[i], init_state[i] ^ current_state[i])
                             assign(init_state[i], current_state[i])
                             save(state[i], state_st[i])

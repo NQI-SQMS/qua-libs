@@ -164,13 +164,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                             # --- Readout ---
                             # Measurement (state discrimination or I/Q acquisition)
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
-                            if node.parameters.use_state_discrimination:
-                                assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                                save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                            qubit.readout_state(
+                                state[i] if node.parameters.use_state_discrimination else None,
+                                I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                                state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                            )
 
                         align()
             align()  # Final alignment after batch completes
@@ -274,8 +272,16 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             if node.outcomes[q.name] == "failed":
                 continue
             else:
-                # Update the qubit flux delay
-                q.z.opx_output.delay += int(node.results["fit_results"][q.name]["flux_delay"])
+                # Update the qubit flux delay. Only the relative Z-XY delay matters, so if
+                # the correction would push the Z delay negative (not allowed by the OPX),
+                # apply the equivalent shift to the XY delay instead, which has headroom.
+                flux_delay = int(node.results["fit_results"][q.name]["flux_delay"])
+                new_z_delay = q.z.opx_output.delay + flux_delay
+                if new_z_delay < 0:
+                    q.xy.opx_output.delay -= new_z_delay
+                    q.z.opx_output.delay = 0
+                else:
+                    q.z.opx_output.delay = new_z_delay
 
 
 # %% {Save_results}

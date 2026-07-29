@@ -233,11 +233,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         # displacement pulse has finished before readout begins.
                         for i, qubit in multiplexed_qubits.items():
                             align(cavity_mode.cavity_mode_drive.name, qubit.resonator.name)
-                            qubit.resonator.measure("readout", qua_vars=(I_base[i], Q_base[i]))
-                            save(I_base[i], I_base_st[i])
-                            save(Q_base[i], Q_base_st[i])
-                            # Wait for the resonator ring-down before the next sequence.
-                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                            qubit.readout_state(None, I=I_base[i], Q=Q_base[i], I_st=I_base_st[i], Q_st=Q_base_st[i])
 
                     # ============================================================
                     # PART 2 — SIGNAL measurement (full protocol, WITH π-pulse)
@@ -291,16 +287,14 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     # Measure the readout IQ for each qubit (signal).
                     for i, qubit in multiplexed_qubits.items():
                         align(qubit.xy.name, qubit.resonator.name)
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
                         # Original single-sequence mode: apply the discrimination
                         # threshold per-shot so that averaging gives a proper
                         # probability estimate (average of binary outcomes).
-                        if not subtract_baseline and node.parameters.use_state_discrimination:
-                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                            save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                        qubit.readout_state(
+                            state[i] if (not subtract_baseline and node.parameters.use_state_discrimination) else None,
+                            I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                            state_st=state_st[i] if (not subtract_baseline and node.parameters.use_state_discrimination) else None,
+                        )
 
         with stream_processing():
             n_st.save("n")
