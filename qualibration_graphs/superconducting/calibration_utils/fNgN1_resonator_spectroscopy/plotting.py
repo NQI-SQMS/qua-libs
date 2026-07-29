@@ -16,16 +16,19 @@ def plot_results(
 ) -> Figure:
     """Overlay Fock and vacuum resonator spectroscopy traces on the same axes.
 
-    Each qubit gets one panel showing both the Fock |k+1⟩ and vacuum |0⟩ traces
-    with their fitted dip frequencies marked.  The dispersive shift Δf is annotated
-    in the panel title.
+    Each qubit gets two panels (amplitude top, phase bottom) showing both the
+    Fock |k+1⟩ and vacuum |0⟩ traces with their fitted dip frequencies marked.
+    The dispersive shift Δf is annotated in the amplitude panel title.
     """
     k = fock_level
     n_qubits = len(ds_fock.qubit.values)
+    has_phase = "phase" in ds_fock and "phase" in ds_vac
 
-    fig, axes = plt.subplots(1, n_qubits, figsize=(7 * n_qubits, 5), squeeze=False)
+    n_rows = 2 if has_phase else 1
+    fig, axes = plt.subplots(n_rows, n_qubits, figsize=(7 * n_qubits, 4 * n_rows), squeeze=False)
 
-    for ax, q_name in zip(axes[0], ds_fock.qubit.values):
+    for col, q_name in enumerate(ds_fock.qubit.values):
+        ax_amp = axes[0][col]
         use_rf = "full_freq" in ds_fock.coords
         xlabel = "RF frequency (GHz)" if use_rf else "Detuning (MHz)"
 
@@ -38,31 +41,42 @@ def plot_results(
         y_fock = ds_fock.IQ_abs.sel(qubit=q_name).values
         y_vac  = ds_vac.IQ_abs.sel(qubit=q_name).values
 
-        ax.plot(x_fock, y_fock, ".", ms=3, color="C0", label=f"Fock |{k + 1}⟩")
-        ax.plot(x_vac,  y_vac,  ".", ms=3, color="C1", label="Vacuum |0⟩")
+        ax_amp.plot(x_fock, y_fock, ".", ms=3, color="C0", label=f"Fock |{k + 1}⟩")
+        ax_amp.plot(x_vac,  y_vac,  ".", ms=3, color="C1", label="Vacuum |0⟩")
 
         freq_fock = _get_freq(fit_results_fock.get(q_name, {}))
         freq_vac  = _get_freq(fit_results_vac.get(q_name, {}))
 
         if freq_fock is not None:
             fp = freq_fock * 1e-9 if use_rf else 0.0
-            ax.axvline(fp, color="C0", ls="--", lw=1.2,
-                       label=f"|{k+1}⟩: {freq_fock * 1e-9:.6f} GHz")
+            ax_amp.axvline(fp, color="C0", ls="--", lw=1.2,
+                           label=f"|{k+1}⟩: {freq_fock * 1e-9:.6f} GHz")
 
         if freq_vac is not None:
             fp = freq_vac * 1e-9 if use_rf else 0.0
-            ax.axvline(fp, color="C1", ls="--", lw=1.2,
-                       label=f"|0⟩: {freq_vac * 1e-9:.6f} GHz")
+            ax_amp.axvline(fp, color="C1", ls="--", lw=1.2,
+                           label=f"|0⟩: {freq_vac * 1e-9:.6f} GHz")
 
         if freq_fock is not None and freq_vac is not None:
             shift_khz = (freq_fock - freq_vac) * 1e-3
-            ax.set_title(f"{q_name}  —  Δf = {shift_khz:+.1f} kHz")
+            ax_amp.set_title(f"{q_name}  —  Δf = {shift_khz:+.1f} kHz")
         else:
-            ax.set_title(q_name)
+            ax_amp.set_title(q_name)
 
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel("|S21| (a.u.)")
-        ax.legend(fontsize=8)
+        ax_amp.set_ylabel("|S21| (a.u.)")
+        ax_amp.legend(fontsize=8)
+
+        if has_phase:
+            ax_phase = axes[1][col]
+            ph_fock = np.degrees(ds_fock.phase.sel(qubit=q_name).values)
+            ph_vac  = np.degrees(ds_vac.phase.sel(qubit=q_name).values)
+            ax_phase.plot(x_fock, ph_fock, ".", ms=3, color="C0", label=f"Fock |{k + 1}⟩")
+            ax_phase.plot(x_vac,  ph_vac,  ".", ms=3, color="C1", label="Vacuum |0⟩")
+            ax_phase.set_xlabel(xlabel)
+            ax_phase.set_ylabel("Phase (deg)")
+            ax_phase.legend(fontsize=8)
+        else:
+            ax_amp.set_xlabel(xlabel)
 
     fig.suptitle(
         f"Resonator spectroscopy: Fock |{k + 1}⟩ vs vacuum — {mode_name}",
