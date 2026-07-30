@@ -1,4 +1,5 @@
 # %% {Imports}
+import dataclasses
 import time as _time
 from dataclasses import asdict
 
@@ -42,7 +43,7 @@ Prerequisites:
     - Integration weight names match parameters (default: iw1/iw2/iw3).
 
 State update:
-    - qubit.resonator.operations["readout"].length  =  optimal readout length [ns]
+    - qubit.resonator.operations["readout_GEF"].length  =  optimal readout length [ns]
 """
 
 node = QualibrationNode[Parameters, Quam](
@@ -66,6 +67,18 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     u = unit(coerce_to_integer=True)
     node.namespace["qubits"] = qubits = get_qubits(node)
     num_qubits = len(qubits)
+
+    for qubit_obj in qubits:
+        if "readout_GEF" in qubit_obj.resonator.operations:
+            continue
+        readout_pulse = qubit_obj.resonator.operations["readout"]
+        new_length = int(round(readout_pulse.length * 1.5 / 4) * 4)  # multiple of 4 ns
+        qubit_obj.resonator.operations["readout_GEF"] = dataclasses.replace(
+            readout_pulse,
+            length=new_length,
+            threshold=None,
+            rus_exit_threshold=None,
+        )
 
     n_avg = node.parameters.num_shots
     division_length = node.parameters.division_length_in_ns // 4  # clock cycles

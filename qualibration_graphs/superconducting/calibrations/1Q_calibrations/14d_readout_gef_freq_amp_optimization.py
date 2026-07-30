@@ -1,4 +1,5 @@
 # %% {Imports}
+import dataclasses
 import datetime
 from dataclasses import asdict
 from pathlib import Path
@@ -52,7 +53,7 @@ Prerequisites:
 
 State updates:
   - qubit.resonator.GEF_frequency_shift  += optimal GEF detuning found
-  - qubit.resonator.operations[operation].amplitude  =  optimal amplitude
+  - qubit.resonator.operations["readout_GEF"].amplitude  =  optimal amplitude
 """
 
 node = QualibrationNode[Parameters, Quam](
@@ -84,6 +85,18 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     u = unit(coerce_to_integer=True)
     node.namespace["qubits"] = qubits = get_qubits(node)
     p = node.parameters
+
+    for qubit_obj in qubits:
+        if "readout_GEF" in qubit_obj.resonator.operations:
+            continue
+        readout_op = qubit_obj.resonator.operations["readout"]
+        new_length = int(round(readout_op.length * 1.5 / 4) * 4)  # multiple of 4 ns
+        qubit_obj.resonator.operations["readout_GEF"] = dataclasses.replace(
+            readout_op,
+            length=new_length,
+            threshold=None,
+            rus_exit_threshold=None,
+        )
 
     span = int(p.frequency_span_in_mhz * u.MHz)
     step = int(p.frequency_step_in_mhz * u.MHz)
@@ -139,7 +152,7 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
 
     qmm = node.machine.connect()
     config = node.machine.generate_config()
-    qm = qmm.open_qm(config)
+    qm = qmm.open_qm(config, close_other_machines=False)
 
     try:
         completed_steps = []

@@ -10,8 +10,8 @@ class NodeSpecificParameters(RunnableParameters):
     """Readout pulse length to use during the sweep [ns]. Must be a multiple of 4. Default is 4000 ns."""
     division_length_in_ns: int = 16
     """Accumulated demodulation chunk size [ns]. Must be a multiple of 4. Default is 16 ns."""
-    readout_operation: str = "readout"
-    """Name of the readout operation. Default is 'readout'."""
+    readout_operation: str = "readout_GEF"
+    """Name of the readout operation. Default is 'readout_GEF'."""
     cos_weight_name: str = "iw1"
     """Name of the cosine integration weight used for accumulated demodulation."""
     sin_weight_name: str = "iw2"

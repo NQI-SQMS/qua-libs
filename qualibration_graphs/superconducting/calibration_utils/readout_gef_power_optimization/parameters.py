@@ -12,8 +12,8 @@ class NodeSpecificParameters(RunnableParameters):
     """Maximum readout amplitude scale factor (relative to current amplitude). Default is 1.9."""
     num_amps: int = 30
     """Number of amplitude steps. Default is 30."""
-    operation: str = "readout"
-    """Readout operation name. Default is 'readout'."""
+    operation: str = "readout_GEF"
+    """Readout operation name. Default is 'readout_GEF'."""
 
 
 class Parameters(
