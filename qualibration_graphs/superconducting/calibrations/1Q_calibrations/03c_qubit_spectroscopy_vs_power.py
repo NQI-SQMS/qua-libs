@@ -27,7 +27,6 @@ from calibration_utils.error_codes import (
     QubitSpectroscopyErrorCode,
     QubitSpectroscopyCorrectiveAction,
 )
-from calibration_utils.power_lock import set_locked_output_power
 
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.data import XarrayDataFetcher
@@ -146,8 +145,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     node.namespace["tracked_qubits"] = []
     for qubit in qubits:
         with tracked_updates(qubit.xy, auto_revert=False) as xy:
-            set_locked_output_power(
-                xy,
+            xy.set_locked_output_power(
                 power_in_dbm=node.parameters.max_power_dbm,
                 operation=node.parameters.operation,
             )
@@ -516,23 +514,23 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                 # (e.g. 10 dBm on MW-FEM channels).  Fall back to max_power_dbm
                 # if set_output_power rejects the value.
                 try:
-                    new_power_settings = set_locked_output_power(q.xy, power_in_dbm=x180_power_dbm, operation="x180")
+                    new_power_settings = q.xy.set_locked_output_power(power_in_dbm=x180_power_dbm, operation="x180")
                 except ValueError:
                     node.log(
                         f"[{q.name}] x180 power {x180_power_dbm:.1f} dBm exceeds hardware "
                         f"limit; clamping to max_power_dbm = {node.parameters.max_power_dbm:.1f} dBm"
                     )
                     x180_power_dbm = node.parameters.max_power_dbm
-                    new_power_settings = set_locked_output_power(q.xy, power_in_dbm=x180_power_dbm, operation="x180")
-                set_locked_output_power(q.xy, power_in_dbm=selected_power_dbm, operation=node.parameters.operation)
+                    new_power_settings = q.xy.set_locked_output_power(power_in_dbm=x180_power_dbm, operation="x180")
+                q.xy.set_locked_output_power(power_in_dbm=selected_power_dbm, operation=node.parameters.operation)
                 power_source = "x180 from broadening fit; saturation at selected power"
                 drive_power_dbm = x180_power_dbm  # used for logging / temp_data
             else:
                 # Fallback: both at selected power.
-                new_power_settings = set_locked_output_power(
-                    q.xy, power_in_dbm=selected_power_dbm, operation=node.parameters.operation
+                new_power_settings = q.xy.set_locked_output_power(
+                    power_in_dbm=selected_power_dbm, operation=node.parameters.operation
                 )
-                set_locked_output_power(q.xy, power_in_dbm=selected_power_dbm, operation="x180")
+                q.xy.set_locked_output_power(power_in_dbm=selected_power_dbm, operation="x180")
                 power_source = "selected power (fallback)"
                 drive_power_dbm = selected_power_dbm
 

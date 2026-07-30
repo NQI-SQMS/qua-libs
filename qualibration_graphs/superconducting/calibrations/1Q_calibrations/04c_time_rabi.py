@@ -19,7 +19,6 @@ from calibration_utils.time_rabi import (
     log_fitted_results,
     plot_raw_data_with_fit,
 )
-from calibration_utils.power_lock import set_locked_output_power
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.runtime import simulate_and_plot
 from qualibration_libs.data import XarrayDataFetcher
@@ -94,7 +93,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     if node.parameters.drive_power_dbm is not None:
         for qubit in qubits:
             with tracked_updates(qubit.xy, auto_revert=False, dont_assign_to_none=True) as xy:
-                set_locked_output_power(xy, power_in_dbm=node.parameters.drive_power_dbm, operation=operation)
+                xy.set_locked_output_power(power_in_dbm=node.parameters.drive_power_dbm, operation=operation)
                 node.namespace["tracked_xy"].append(xy)
         node.log(
             f"Time Rabi: temporarily set XY drive power to "
@@ -129,13 +128,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                     # --- Readout ---
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
-                        if node.parameters.use_state_discrimination:
-                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                            save(state[i], state_st[i])
-                        qubit.resonator.wait(node.machine.depletion_time // 4)
+                        qubit.readout_state(
+                            state[i] if node.parameters.use_state_discrimination else None,
+                            I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                            state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                        )
                     align()
 
         with stream_processing():

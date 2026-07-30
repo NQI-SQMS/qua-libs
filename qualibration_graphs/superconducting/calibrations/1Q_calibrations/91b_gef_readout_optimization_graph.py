@@ -5,6 +5,7 @@ GEF Readout Optimization Graph
 Optimizes the readout for three-level (g/e/f) state discrimination in sequence:
 
   ┌─────────────────────────────────────────────────────────────────────────┐
+  │  0.  gef_dispersive_shift               (20b)                           │
   │  1.  gef_readout_length_optimization   (14c)                            │
   │  2.  gef_readout_frequency_optimization (14)                            │
   │  3.  gef_readout_power_optimization    (14b)                            │
@@ -18,6 +19,7 @@ bringup_graphs.py and can be adjusted there or through the Qualibrate GUI.
 Prerequisites:
   - GE bringup completed (ge_bringup_graph, 92).
   - EF transition calibrated (ef_bringup_graph without gef_readout step, 93).
+  - EF_x180 pulse calibrated (node 13).
 """
 
 from typing import List
@@ -39,6 +41,15 @@ with QualibrationGraph.build(
     "gef_readout_optimization_graph",
     parameters=GEFReadoutOptParameters(),
 ) as graph:
+
+    # ── 0. GEF dispersive shift ───────────────────────────────────────────────
+    gef_dispersive_shift = library.nodes["20b_dispersive_shift_gef"].copy(
+        name="gef_dispersive_shift",
+        num_shots=200,
+        frequency_span_in_mhz=5.0,
+        frequency_step_in_mhz=0.05,
+    )
+    graph.add_node(gef_dispersive_shift)
 
     # ── 1. GEF readout length optimization ───────────────────────────────────
     gef_length_opt = library.nodes["14c_readout_gef_length_optimization"].copy(
@@ -80,6 +91,7 @@ with QualibrationGraph.build(
     graph.add_node(gef_iq_blobs)
 
     # ── Execution order ────────────────────────────────────────────────────────
+    graph.connect(gef_dispersive_shift, gef_length_opt)
     graph.connect(gef_length_opt, gef_freq_opt)
     graph.connect(gef_freq_opt, gef_power_opt)
     graph.connect(gef_power_opt, gef_iq_blobs)

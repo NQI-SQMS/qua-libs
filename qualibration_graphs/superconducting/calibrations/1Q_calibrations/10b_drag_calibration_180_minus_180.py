@@ -159,13 +159,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                         # --- Readout ---
                         for i, qubit in multiplexed_qubits.items():
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
-                            if node.parameters.use_state_discrimination:
-                                assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                                save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                            qubit.readout_state(
+                                state[i] if node.parameters.use_state_discrimination else None,
+                                I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                                state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                            )
 
                         align()
         with stream_processing():

@@ -119,6 +119,15 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             break
     node.namespace["current_alpha_max"] = current_alpha_max
 
+    displaced_threshold = None
+    if node.parameters.use_state_discrimination and node.parameters.use_displaced_threshold:
+        for _pk, _pv in _pairs.items():
+            if _pk.endswith(f"_{mode_name}"):
+                _t = getattr(_pv, "ge_iq_threshold_displaced", None)
+                if _t is not None:
+                    displaced_threshold = float(_t)
+                break
+
     # Amplitude sweep (includes negative values for full Wigner slice)
     amp_array = np.linspace(
         node.parameters.amp_min / current_alpha_max,
@@ -184,13 +193,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     # --- Measure ---
                     align()
                     for i, qubit in multiplexed_qubits.items():
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
-                        if node.parameters.use_state_discrimination:
-                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                            save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                        qubit.readout_state(
+                            state[i] if node.parameters.use_state_discrimination else None,
+                            I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                            state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                            threshold=displaced_threshold,
+                        )
 
                     align()
                     # --- Reverse displacement (cavity back toward vacuum) ---

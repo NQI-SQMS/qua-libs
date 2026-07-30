@@ -141,13 +141,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                         # --- Readout ---
                         for i, qubit in multiplexed_qubits.items():
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
-                            if node.parameters.use_state_discrimination:
-                                assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
-                                save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                            qubit.readout_state(
+                                state[i] if node.parameters.use_state_discrimination else None,
+                                I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                                state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                            )
                         align()
 
         with stream_processing():
@@ -416,7 +414,9 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                             q.xy.operations["x90"].amplitude = new_amp / 2
                             if "EF_x180" in q.xy.operations:
                                 try:
-                                    q.xy.operations["EF_x180"].amplitude = new_amp
+                                    ef_op = q.xy.operations["EF_x180"]
+                                    if current_amp > 0 and ef_op.amplitude / current_amp >= 0.9:
+                                        ef_op.amplitude = new_amp
                                 except (ValueError, KeyError, AttributeError):
                                     pass
                             if "selective_x180" in q.xy.operations:
@@ -446,7 +446,9 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                             q.xy.operations["x90"].amplitude = new_amp / 2
                             if "EF_x180" in q.xy.operations:
                                 try:
-                                    q.xy.operations["EF_x180"].amplitude = new_amp
+                                    ef_op = q.xy.operations["EF_x180"]
+                                    if current_amp > 0 and ef_op.amplitude / current_amp >= 0.9:
+                                        ef_op.amplitude = new_amp
                                 except (ValueError, KeyError, AttributeError):
                                     pass
                             if "selective_x180" in q.xy.operations:
@@ -473,7 +475,9 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                         q.xy.operations["x90"].amplitude = new_amp / 2
                         if "EF_x180" in q.xy.operations:
                             try:
-                                q.xy.operations["EF_x180"].amplitude = new_amp
+                                ef_op = q.xy.operations["EF_x180"]
+                                if current_amp > 0 and ef_op.amplitude / current_amp >= 0.9:
+                                    ef_op.amplitude = new_amp
                             except (ValueError, KeyError, AttributeError):
                                 pass
                         if "selective_x180" in q.xy.operations:
@@ -496,7 +500,9 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                         q.xy.operations["x90"].amplitude = safe_amp / 2
                         if "EF_x180" in q.xy.operations:
                             try:
-                                q.xy.operations["EF_x180"].amplitude = safe_amp
+                                ef_op = q.xy.operations["EF_x180"]
+                                if current_amp > 0 and ef_op.amplitude / current_amp >= 0.9:
+                                    ef_op.amplitude = safe_amp
                             except (ValueError, KeyError, AttributeError):
                                 pass
                         if "selective_x180" in q.xy.operations:
@@ -556,13 +562,16 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
 
                 else:
                     # Amplitude within safe base limit: apply fitted value directly.
+                    pre_update_x180_amp = operation.amplitude
                     safe_amp = float(np.clip(fit_result["opt_amp"], 0.0, max_safe_base_amp))
                     operation.amplitude = safe_amp
                     if node.parameters.operation == "x180":
                         q.xy.operations["x90"].amplitude = safe_amp / 2
                         if "EF_x180" in q.xy.operations:
                             try:
-                                q.xy.operations["EF_x180"].amplitude = safe_amp
+                                ef_op = q.xy.operations["EF_x180"]
+                                if pre_update_x180_amp > 0 and ef_op.amplitude / pre_update_x180_amp >= 0.9:
+                                    ef_op.amplitude = safe_amp
                             except (ValueError, KeyError, AttributeError):
                                 pass
                         if "selective_x180" in q.xy.operations:

@@ -28,10 +28,6 @@ from quam_builder.architecture.superconducting.qubit_pair.cavity_transmon_pair i
 from calibration_utils.shared import (
     apply_confusion_matrix_correction,
     _get_pair_components,
-    _get_transition_rf,
-    _fock_prep_qua,
-    _ge_if_at_fock,
-    _ef_if_at_fock,
 )
 
 # %% {Node initialisation}
@@ -98,7 +94,7 @@ def _centre_rf_freq(node, pair, qubit, sideband_drive, cav_mode):
     When False (default): returns the RF_frequency already saved in the state.
     """
     k = node.parameters.fock_level
-    stored = _get_transition_rf(pair, sideband_drive, k)
+    stored = pair.get_transition_rf(k)
 
     if not node.parameters.use_theoretical_frequency_estimate:
         return stored
@@ -113,7 +109,7 @@ def _centre_rf_freq(node, pair, qubit, sideband_drive, cav_mode):
             )
         return stored
     # k > 0: offset f0g1 by k × |chi|
-    f0g1_rf = _get_transition_rf(pair, sideband_drive, 0)
+    f0g1_rf = pair.get_transition_rf(0)
     chi = pair.chi if pair.chi is not None else 0
     return f0g1_rf + k * chi
 
@@ -153,8 +149,14 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
     chi_hz = float(pair.chi) if (pair is not None and getattr(pair, "chi", None) is not None) else 0.0
 
-    ge_if_k = _ge_if_at_fock(pair, pair_qubit, k)
-    ef_if_k = _ef_if_at_fock(pair, pair_qubit, k)
+    displaced_threshold = None
+    if node.parameters.use_state_discrimination and node.parameters.use_displaced_threshold:
+        _t = getattr(pair, "ge_iq_threshold_displaced", None)
+        if _t is not None:
+            displaced_threshold = float(_t)
+
+    ge_if_k = pair.ge_if_at_fock(pair_qubit, k)
+    ef_if_k = pair.ef_if_at_fock(pair_qubit, k)
 
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
@@ -181,7 +183,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 with for_(*from_array(f, dfs)):
                     for i, qubit in multiplexed_qubits.items():
                         # ── Fock state preparation ──────────────────────────
-                        _fock_prep_qua(k, pair, qubit, sideband_drive)
+                        pair.fock_prep_qua(k, qubit)
 
                         # ── Prepare qubit in |f⟩ at Fock-k-shifted frequencies ─
                         qubit.xy.update_frequency(ge_if_k)
@@ -214,16 +216,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                         # ── Readout ────────────────────────────────────────
                         align(qubit.xy.name, qubit.resonator.name)
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
-                        if node.parameters.use_state_discrimination:
-                            assign(
-                                state[i],
-                                Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold),
-                            )
-                            save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                        qubit.readout_state(
+                            state[i] if node.parameters.use_state_discrimination else None,
+                            I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                            state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                            threshold=displaced_threshold,
+                        )
 
                         # ── Reset cavity and qubit ─────────────────────────
                         cav_mode.reset(
@@ -348,7 +346,7 @@ def update_state_node(node: QualibrationNode[Parameters, Quam]):
                 sideband_drive.RF_frequency = fp.frequency
             # Derive and save chi from the measured sideband shift when absent
             if k > 0 and node.parameters.update_chi_if_absent and pair.chi is None:
-                f0g1_rf = _get_transition_rf(pair, sideband_drive, 0)
+                f0g1_rf = pair.get_transition_rf(0)
                 pair.chi = (fp.frequency - f0g1_rf) / k
             break  # single sideband drive per mode
 

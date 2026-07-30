@@ -128,13 +128,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     align()
 
                     for i, qubit in multiplexed_qubits.items():
-                        # readout the resonator
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        # wait for the resonator to deplete
-                        qubit.resonator.wait(node.machine.depletion_time // 4)
-                        # save data
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
+                        qubit.readout_state(None, I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i])
                     align()
 
         with stream_processing():

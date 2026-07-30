@@ -23,7 +23,6 @@ from calibration_utils.broad_resonator_spectroscopy import (
     plot_raw_amplitude_with_fit,
     plot_raw_phase,
 )
-from calibration_utils.power_lock import set_locked_output_power
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.runtime import simulate_and_plot
 from qualibration_libs.data import XarrayDataFetcher
@@ -95,7 +94,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     if node.parameters.readout_power_dbm is not None:
         for qubit in qubits:
             with tracked_updates(qubit.resonator, auto_revert=False, dont_assign_to_none=True) as resonator:
-                set_locked_output_power(resonator, power_in_dbm=node.parameters.readout_power_dbm)
+                resonator.set_locked_output_power(power_in_dbm=node.parameters.readout_power_dbm)
                 node.namespace["tracked_resonators"].append(resonator)
         node.log(
             f"Broad spectroscopy: temporarily set readout power to "

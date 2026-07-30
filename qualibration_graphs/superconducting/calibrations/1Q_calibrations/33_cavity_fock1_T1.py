@@ -17,11 +17,6 @@ from calibration_utils.shared import (
     apply_confusion_matrix_correction,
     _get_cavity_mode,
     _get_pair,
-    _get_transition_rf,
-    _resolve_sb_op,
-    _ef_if_at_fock,
-    _ge_if_at_fock,
-    _fock_prep_qua,
 )
 from qualibration_libs.parameters import (
     get_qubits,
@@ -122,6 +117,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         )
     node.namespace["sideband_drive"] = sideband_drive
 
+    displaced_threshold = None
+    if node.parameters.use_state_discrimination and node.parameters.use_displaced_threshold:
+        _t = getattr(pair, "ge_iq_threshold_displaced", None) if pair is not None else None
+        if _t is not None:
+            displaced_threshold = float(_t)
+
     # SNAP+displacement: resolve displacement scales and n=1 dressed qubit IF
     _AMP_MAX = 2.0 - 2**-16
     if prep_method == "snap_displacement":
@@ -187,15 +188,15 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                         if prep_method == "sideband":
                             # Frequencies at Fock |0> needed for the inverse sideband readout
-                            ef_if_0 = _ef_if_at_fock(pair, qubit, 0)
-                            sb_rf_0 = _get_transition_rf(pair, sideband_drive, 0)
+                            ef_if_0 = pair.ef_if_at_fock(qubit, 0)
+                            sb_rf_0 = pair.get_transition_rf(0)
                             target_if_0 = int(sideband_drive.intermediate_frequency) + int(sb_rf_0 - sideband_drive.RF_frequency)
                             tr_0 = pair.transitions.get("f0g1")
                             flat_top_clk_0 = (tr_0.pi_flat_top_length_ns // 4) if (tr_0 and tr_0.pi_flat_top_length_ns) else None
 
                             # -- 2a. Fock |1> prep: ge pi -> ef pi -> f0g1 pi ---
                             align(qubit.xy.name, sideband_drive.name, qubit.resonator.name)
-                            _fock_prep_qua(1, pair, qubit, sideband_drive)
+                            pair.fock_prep_qua(1, qubit)
                             align(sideband_drive.name, qubit.xy.name, qubit.resonator.name)
 
                             # -- 3a. Wait tau ----------------------------------
@@ -220,7 +221,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                         else:  # snap_displacement
                             # n=1 dressed qubit IF for PNRS readout
-                            n1_if = _ge_if_at_fock(pair, qubit, 1)
+                            n1_if = pair.ge_if_at_fock(qubit, 1)
 
                             # -- 2b. Fock |1> prep: D(alpha1) -> SNAP₀ -> D(alpha2)
                             align(qubit.xy.name, cavity_mode.cavity_mode_drive.name, qubit.resonator.name)
@@ -249,16 +250,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                         # -- 5. Measure ----------------------------------------
                         align(qubit.xy.name, qubit.resonator.name)
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
-                        if node.parameters.use_state_discrimination:
-                            assign(
-                                state[i],
-                                Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold),
-                            )
-                            save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                        qubit.readout_state(
+                            state[i] if node.parameters.use_state_discrimination else None,
+                            I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                            state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                            threshold=displaced_threshold,
+                        )
 
                     align()
 

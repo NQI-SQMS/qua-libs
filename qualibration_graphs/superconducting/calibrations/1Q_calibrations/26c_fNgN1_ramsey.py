@@ -28,10 +28,6 @@ from quam_builder.architecture.superconducting.qubit_pair.cavity_transmon_pair i
 from calibration_utils.shared import (
     apply_confusion_matrix_correction,
     _get_pair_components,
-    _get_transition_rf,
-    _fock_prep_qua,
-    _ge_if_at_fock,
-    _ef_if_at_fock,
 )
 
 # %% {Node initialisation}
@@ -229,7 +225,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     pair, pair_qubit, sideband_drive, cav_mode = _get_pair_components(node)
 
     # Calibrated frequency for this transition
-    centre_rf = _get_transition_rf(pair, sideband_drive, k)
+    centre_rf = pair.get_transition_rf(k)
     if_offset = int(centre_rf - sideband_drive.RF_frequency)
     target_if = int(sideband_drive.intermediate_frequency) + if_offset
 
@@ -248,10 +244,16 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
     detuning_signs = [-1, 1]  # inner loop; sign=-1 → −δ, sign=+1 → +δ
 
-    ge_if_k = _ge_if_at_fock(pair, pair_qubit, k)
-    ef_if_k = _ef_if_at_fock(pair, pair_qubit, k)
+    ge_if_k = pair.ge_if_at_fock(pair_qubit, k)
+    ef_if_k = pair.ef_if_at_fock(pair_qubit, k)
 
     chi_hz = float(pair.chi) if (pair is not None and getattr(pair, "chi", None) is not None) else 0.0
+
+    displaced_threshold = None
+    if node.parameters.use_state_discrimination and node.parameters.use_displaced_threshold:
+        _t = getattr(pair, "ge_iq_threshold_displaced", None)
+        if _t is not None:
+            displaced_threshold = float(_t)
 
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
@@ -288,7 +290,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     with for_(*from_array(detuning_sign, detuning_signs)):
                         for i, qubit in multiplexed_qubits.items():
                             # -- Fock state preparation --------------------------
-                            _fock_prep_qua(k, pair, qubit, sideband_drive)
+                            pair.fock_prep_qua(k, qubit)
 
                             # -- Prepare qubit in |f⟩ at Fock-k-shifted frequencies -
                             qubit.xy.update_frequency(ge_if_k)
@@ -328,16 +330,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                             # -- Readout ----------------------------------------
                             align(qubit.xy.name, qubit.resonator.name)
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
-                            if node.parameters.use_state_discrimination:
-                                assign(
-                                    state[i],
-                                    Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold),
-                                )
-                                save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                            qubit.readout_state(
+                                state[i] if node.parameters.use_state_discrimination else None,
+                                I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                                state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                                threshold=displaced_threshold,
+                            )
 
                             # -- Reset cavity and qubit -------------------------
                             cav_mode.reset(
@@ -452,7 +450,7 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
         for q_name, res in node.results["fit_results"].items():
             if not res["success"]:
                 continue
-            current_rf = _get_transition_rf(pair, sideband_drive, k)
+            current_rf = pair.get_transition_rf(k)
             corrected_rf = current_rf + res["frequency_correction_hz"]
             if tr_key not in pair.transitions:
                 pair.transitions[tr_key] = SidebandTransition()

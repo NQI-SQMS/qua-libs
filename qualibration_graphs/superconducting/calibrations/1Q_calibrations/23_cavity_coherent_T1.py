@@ -119,6 +119,15 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     node.namespace["sideband_drive"] = sideband_drive
     node.namespace["alpha_max"] = alpha_max
 
+    displaced_threshold = None
+    if node.parameters.use_state_discrimination and node.parameters.use_displaced_threshold:
+        for pair_key, _pair in pairs.items():
+            if pair_key.endswith(f"_{mode_name}"):
+                _t = getattr(_pair, "ge_iq_threshold_displaced", None)
+                if _t is not None:
+                    displaced_threshold = float(_t)
+                break
+
     # Compute and validate the QUA amplitude_scale
     amplitude_scale = node.parameters.displacement_alpha / alpha_max
     if abs(amplitude_scale) > _AMP_MAX:
@@ -282,7 +291,8 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         save(I[i], I_st[i])
                         save(Q[i], Q_st[i])
                         if not subtract_baseline and node.parameters.use_state_discrimination:
-                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
+                            _thresh = displaced_threshold if displaced_threshold is not None else qubit.resonator.operations["readout"].threshold
+                            assign(state[i], Cast.to_int(I[i] > _thresh))
                             save(state[i], state_st[i])
                         qubit.resonator.wait(qubit.resonator.depletion_time // 4)
                     align()

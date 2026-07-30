@@ -21,10 +21,6 @@ from quam_builder.architecture.superconducting.qubit_pair.cavity_transmon_pair i
 from calibration_utils.shared import (
     apply_confusion_matrix_correction,
     _get_pair_components,
-    _get_transition_rf,
-    _fock_prep_qua,
-    _ge_if_at_fock,
-    _ef_if_at_fock,
 )
 from calibration_utils.fNgN1_qubit_ef_spectroscopy import Parameters, fit_raw_data, plot_raw_data_with_fit
 
@@ -91,13 +87,19 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     op = node.parameters.operation
     op_len = node.parameters.operation_len_in_ns
 
-    ge_if_k = _ge_if_at_fock(pair, pair_qubit, k + 1)
-    ef_centre_if = _ef_if_at_fock(pair, pair_qubit, k + 1)
+    ge_if_k = pair.ge_if_at_fock(pair_qubit, k + 1)
+    ef_centre_if = pair.ef_if_at_fock(pair_qubit, k + 1)
     node.namespace["ge_if_k"] = ge_if_k
     node.namespace["ef_centre_if"] = ef_centre_if
     node.namespace["ge_base_if"] = int(pair_qubit.xy.intermediate_frequency)
 
     chi_hz = float(pair.chi) if (pair is not None and getattr(pair, "chi", None) is not None) else 0.0
+
+    displaced_threshold = None
+    if node.parameters.use_state_discrimination and node.parameters.use_displaced_threshold:
+        _t = getattr(pair, "ge_iq_threshold_displaced", None)
+        if _t is not None:
+            displaced_threshold = float(_t)
 
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
@@ -127,7 +129,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 with for_(*from_array(f, dfs)):
                     for i, qubit in multiplexed_qubits.items():
                         # -- Fock state preparation --------------------------
-                        _fock_prep_qua(k + 1, pair, qubit, sideband_drive)
+                        pair.fock_prep_qua(k + 1, qubit)
 
                         # -- π_ge at chi_focka-shifted frequency ------------
                         qubit.xy.update_frequency(ge_if_k)
@@ -153,16 +155,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                         # -- Readout ----------------------------------------
                         align(qubit.xy.name, qubit.resonator.name)
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
-                        if node.parameters.use_state_discrimination:
-                            assign(
-                                state[i],
-                                Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold),
-                            )
-                            save(state[i], state_st[i])
-                        qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                        qubit.readout_state(
+                            state[i] if node.parameters.use_state_discrimination else None,
+                            I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                            state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                            threshold=displaced_threshold,
+                        )
 
                         # -- Cavity + qubit reset ----------------------------
                         cav_mode.reset(
@@ -230,8 +228,8 @@ def load_data(node: QualibrationNode[Parameters, Quam]):
 def analyse_data(node: QualibrationNode[Parameters, Quam]):
     pair, pair_qubit, _, _ = _get_pair_components(node)
     k = node.parameters.fock_level
-    ge_if_k = node.namespace.get("ge_if_k", _ge_if_at_fock(pair, pair_qubit, k + 1))
-    ef_centre_if = node.namespace.get("ef_centre_if", _ef_if_at_fock(pair, pair_qubit, k + 1))
+    ge_if_k = node.namespace.get("ge_if_k", pair.ge_if_at_fock(pair_qubit, k + 1))
+    ef_centre_if = node.namespace.get("ef_centre_if", pair.ef_if_at_fock(pair_qubit, k + 1))
     ge_base_if = node.namespace.get("ge_base_if", int(pair_qubit.xy.intermediate_frequency))
     anharmonicity_estimate = ef_centre_if - ge_if_k
 
@@ -273,7 +271,7 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
 
     pair, pair_qubit, _, _ = _get_pair_components(node)
     ge_base_if = node.namespace.get("ge_base_if", int(pair_qubit.xy.intermediate_frequency))
-    ef_centre_if = node.namespace.get("ef_centre_if", _ef_if_at_fock(pair, pair_qubit, k + 1))
+    ef_centre_if = node.namespace.get("ef_centre_if", pair.ef_if_at_fock(pair_qubit, k + 1))
     rf_center_hz = pair_qubit.xy.RF_frequency - ge_base_if + ef_centre_if
 
     fig = plot_raw_data_with_fit(ds, node.results["fit_results"], rf_center_hz, k + 1, node.parameters.mode_name)

@@ -27,8 +27,6 @@ from calibration_utils.ramsey import (
 from calibration_utils.shared import (
     apply_confusion_matrix_correction,
     _get_pair_components,
-    _fock_prep_qua,
-    _ge_if_at_fock,
 )
 
 # %% {Node initialisation}
@@ -109,7 +107,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
     pair, pair_qubit, sideband_drive, cav_mode = _get_pair_components(node)
 
-    ge_if_k = _ge_if_at_fock(pair, pair_qubit, k + 1)
+    ge_if_k = pair.ge_if_at_fock(pair_qubit, k + 1)
     node.namespace["ge_if_k"] = ge_if_k
 
     detuning_hz = float(node.parameters.frequency_detuning_in_mhz) * 1e6
@@ -118,6 +116,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     detuning_signs = [-1, 1]
 
     chi_hz = float(pair.chi) if (pair is not None and getattr(pair, "chi", None) is not None) else 0.0
+
+    displaced_threshold = None
+    if node.parameters.use_state_discrimination and node.parameters.use_displaced_threshold:
+        _t = getattr(pair, "ge_iq_threshold_displaced", None)
+        if _t is not None:
+            displaced_threshold = float(_t)
 
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
@@ -154,7 +158,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                     with for_(*from_array(detuning_sign, detuning_signs)):
                         for i, qubit in multiplexed_qubits.items():
                             # -- Fock state preparation --------------------------
-                            _fock_prep_qua(k + 1, pair, qubit, sideband_drive)
+                            pair.fock_prep_qua(k + 1, qubit)
 
                             # -- ge Ramsey at chi_focka-shifted frequency ---------
                             qubit.xy.update_frequency(ge_if_k)
@@ -173,16 +177,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                             # -- Readout ----------------------------------------
                             align(qubit.xy.name, qubit.resonator.name)
-                            qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                            save(I[i], I_st[i])
-                            save(Q[i], Q_st[i])
-                            if node.parameters.use_state_discrimination:
-                                assign(
-                                    state[i],
-                                    Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold),
-                                )
-                                save(state[i], state_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                            qubit.readout_state(
+                                state[i] if node.parameters.use_state_discrimination else None,
+                                I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                                state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                                threshold=displaced_threshold,
+                            )
 
                             # -- Cavity + qubit reset ----------------------------
                             cav_mode.reset(

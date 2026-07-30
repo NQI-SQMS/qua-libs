@@ -118,6 +118,15 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             break
     node.namespace["sideband_drive"] = sideband_drive
 
+    displaced_threshold = None
+    if node.parameters.use_state_discrimination and node.parameters.use_displaced_threshold:
+        for _pk, _pv in pairs.items():
+            if _pk.endswith(f"_{mode_name}"):
+                _t = getattr(_pv, "ge_iq_threshold_displaced", None)
+                if _t is not None:
+                    displaced_threshold = float(_t)
+                break
+
     # amp_min/amp_max are in photon units (alpha). Convert to amplitude_scale using the
     # current alpha_max so the sweep always covers the same physical range on re-runs.
     # On first run alpha_max defaults to 1.0 (amplitude_scale == photon number).
@@ -298,7 +307,8 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         # threshold per-shot so that averaging gives a proper
                         # probability estimate (average of binary outcomes).
                         if not subtract_baseline and node.parameters.use_state_discrimination:
-                            assign(state[i], Cast.to_int(I[i] > qubit.resonator.operations["readout"].threshold))
+                            _thresh = displaced_threshold if displaced_threshold is not None else qubit.resonator.operations["readout"].threshold
+                            assign(state[i], Cast.to_int(I[i] > _thresh))
                             save(state[i], state_st[i])
                         qubit.resonator.wait(qubit.resonator.depletion_time // 4)
 
@@ -407,7 +417,6 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
     exhausted, the pulse duration, and force a graph-level retry.
     """
     from calibration_utils.error_codes import DisplacementVacuumErrorCode, DisplacementVacuumCorrectiveAction
-    from calibration_utils.power_lock import set_locked_output_power
 
     cavity_mode = node.namespace["cavity_mode"]
     base_amp = float(cavity_mode.cavity_mode_drive.operations["displacement"].amplitude)
@@ -471,8 +480,7 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
                         desired_power_dbm = current_power_dbm + 20 * np.log10(desired_base_amp / base_amp)
                         # Gain-locked: only the operation's amplitude (Volts) changes,
                         # never Octave gain / full_scale_power_dbm.
-                        set_locked_output_power(
-                            cavity_mode.cavity_mode_drive,
+                        cavity_mode.cavity_mode_drive.set_locked_output_power(
                             power_in_dbm=desired_power_dbm,
                             operation="displacement",
                         )

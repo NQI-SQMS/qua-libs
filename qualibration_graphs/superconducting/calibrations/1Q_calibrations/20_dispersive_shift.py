@@ -98,10 +98,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         qubit.resonator.update_frequency(
                             qubit.resonator.intermediate_frequency + df
                         )
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        qubit.resonator.wait(node.machine.depletion_time // 4)
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
+                        qubit.readout_state(None, I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i])
                     align()
 
                 # ── |e⟩ sweep ──────────────────────────────────────────────
@@ -112,10 +109,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         qubit.resonator.update_frequency(
                             qubit.resonator.intermediate_frequency + df
                         )
-                        qubit.resonator.measure("readout", qua_vars=(I[i], Q[i]))
-                        qubit.resonator.wait(node.machine.depletion_time // 4)
-                        save(I[i], I_st[i])
-                        save(Q[i], Q_st[i])
+                        qubit.readout_state(None, I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i])
                     align()
 
         with stream_processing():

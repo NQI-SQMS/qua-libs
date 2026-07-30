@@ -250,19 +250,32 @@ def fit_raw_data(
 
         try:
             a_max = float(np.abs(a_arr).max())
+            if node.parameters.use_state_discrimination:
+                # Signal is a probability in [0, 1]: use tight, physically motivated bounds.
+                fit_bounds = ([0.0, 1e-4, -0.5], [1.5, a_max * 2, 1.0])
+            else:
+                # Signal is raw I in Volts: amplitude can be negative (if I_e < I_g)
+                # and the offset (I_g baseline) can fall anywhere on the Volt scale.
+                sig_range = float(np.ptp(signal))
+                offset_center = float(np.median(signal))
+                fit_bounds = (
+                    [-sig_range * 2, 1e-4, offset_center - 3 * sig_range],
+                    [ sig_range * 2, a_max * 2, offset_center + 3 * sig_range],
+                )
             popt, _ = curve_fit(
                 vacuum_population,
                 a_arr,
                 signal,
                 p0=[amplitude0, sigma0, offset0],
-                bounds=([0.0, 1e-4, -0.5], [1.5, a_max * 2, 1.0]),
+                bounds=fit_bounds,
                 maxfev=10000,
             )
             amplitude_fit, sigma_fit, offset_fit = popt
+            min_contrast = 0.02 if node.parameters.use_state_discrimination else 0.0
             fit_ok = bool(
                 np.isfinite(sigma_fit)
                 and sigma_fit > 0
-                and amplitude_fit > 0.02  # require at least ~2% contrast
+                and abs(amplitude_fit) > min_contrast  # require at least ~2% contrast for probabilities
             )
         except Exception:
             amplitude_fit = sigma_fit = offset_fit = float("nan")

@@ -52,6 +52,9 @@ class NodeSpecificParameters(RunnableParameters):
     If False, only the standard single-sequence protocol is executed."""
     use_state_discrimination: bool = True
     """True → measure qubit state. False → measure raw I quadrature."""
+    use_displaced_threshold: bool = False
+    """When True and use_state_discrimination is True, use pair.ge_iq_threshold_displaced
+    instead of the vacuum readout threshold (calibrated by node 26j)."""
     use_confusion_matrix_correction: bool = False
     """Apply ge confusion matrix correction to averaged state probabilities."""
     normalize_plot: bool = False
