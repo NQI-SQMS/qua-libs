@@ -1390,7 +1390,7 @@ def build_gef_readout_optimization(
             num_shots=2000,
             max_readout_length_in_ns=4000,
             division_length_in_ns=16,
-            readout_operation="readout",
+            readout_operation="readout_GEF",
             cos_weight_name="iw1",
             sin_weight_name="iw2",
             minus_sin_weight_name="iw3",

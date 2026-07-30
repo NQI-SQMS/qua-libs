@@ -20,8 +20,8 @@ class NodeSpecificParameters(RunnableParameters):
     """Number of amplitude steps (linearly spaced). Default is 11."""
     max_readout_amplitude_v: Optional[float] = None
     """Hard cap on the absolute readout amplitude (V). Amplitude steps exceeding this are skipped. Default is None."""
-    operation: str = "readout"
-    """Readout operation name. Default is 'readout'."""
+    operation: str = "readout_GEF"
+    """Readout operation name. Default is 'readout_GEF'."""
     ef_pi_pulse: str = "EF_x180"
     """Name of the EF π pulse used to prepare the |f⟩ state. Default is 'EF_x180'."""
 
