@@ -291,12 +291,14 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
     ds_fit = node.results["ds_fit"]
 
     fig_jeff = plot_effective_coupling(ds_fit, qubit_pairs, log_y=True)
+    fig_jeff_linear = plot_effective_coupling(ds_fit, qubit_pairs, log_y=False)
     fig_decay = plot_decay_rate_data(ds_fit, qubit_pairs, log_y=True)
     fig_raw = plot_raw_data(node.results["ds_raw"], qubit_pairs)
     fig_fit = plot_fit_data(ds_fit, qubit_pairs)
 
     node.results["figures"] = {
         **({"jeff_vs_amp": fig_jeff} if fig_jeff is not None else {}),
+        **({"jeff_vs_amp_linear": fig_jeff_linear} if fig_jeff_linear is not None else {}),
         **({"decay_time": fig_decay} if fig_decay is not None else {}),
         "raw_data": fig_raw,
         **({"fit_data": fig_fit} if fig_fit is not None else {}),
