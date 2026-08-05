@@ -32,6 +32,7 @@ from calibration_utils.power_lock import set_locked_output_power
 from qualibration_libs.parameters import get_qubits
 from qualibration_libs.data import XarrayDataFetcher
 from qualibration_libs.core import tracked_updates
+from quam_config.hardware_batching_patch import max_simultaneous_multiplexed
 
 
 # %% {Helper functions}
@@ -138,7 +139,12 @@ node.machine = Quam.load()
 def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     u = unit(coerce_to_integer=True)
 
-    qubits = get_qubits(node)
+    # This node plays real-time frequency *and* real-time amplitude-scaled pulses on every
+    # multiplexed qubit's XY element before reading out - much more resource-hungry per qubit
+    # than a plain readout sweep, so it needs a tighter multiplexing cap than the shared default.
+    # TODO: 2 is an initial guess pending hardware confirmation; adjust if still failing/too conservative.
+    with max_simultaneous_multiplexed(2):
+        qubits = get_qubits(node)
     num_qubits = len(qubits)
     n_avg = node.parameters.num_shots
     node.namespace["qubits"] = qubits
