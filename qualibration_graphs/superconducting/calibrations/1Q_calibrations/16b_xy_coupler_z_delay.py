@@ -362,9 +362,17 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             if res is None:
                 continue
 
-            # Update the coupler flux delay
+            # Update the coupler flux delay. Only the relative XY-coupler delay matters, so
+            # if the correction would push the coupler delay negative (not allowed by the
+            # OPX), apply the equivalent shift to the measured qubit's XY delay instead,
+            # which has headroom.
             flux_delay = int(res.get("flux_delay", 0))
-            qp.coupler.opx_output.delay += flux_delay
+            new_coupler_delay = qp.coupler.opx_output.delay + flux_delay
+            if new_coupler_delay < 0:
+                measured_qubit.xy.opx_output.delay -= new_coupler_delay
+                qp.coupler.opx_output.delay = 0
+            else:
+                qp.coupler.opx_output.delay = new_coupler_delay
             print(f"Updated {qp.coupler.name} delay by {flux_delay} ns")
 
 
