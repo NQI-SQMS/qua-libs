@@ -39,7 +39,7 @@ def plot_raw_data_with_fit(ds: xr.Dataset, qubits: List[AnyTransmon], fits: xr.D
     for ax, qubit in grid_iter(grid):
         plot_individual_data_with_fit(ax, ds, qubit, fits.sel(qubit=qubit["qubit"]))
 
-    grid.fig.suptitle("Qubit spectroscopy (rotated 'I' quadrature + fit)")
+    grid.fig.suptitle("Ramsey (rotated 'I' quadrature + fit)")
     grid.fig.set_size_inches(15, 9)
     grid.fig.tight_layout()
     return grid.fig
@@ -89,7 +89,7 @@ def plot_individual_data_with_fit(ax: Axes, ds: xr.Dataset, qubit: dict[str, str
     ax.set_title(qubit["qubit"])
     if fit is not None:
         add_fit_text(ax, fit)
-    ax.legend()
+    ax.legend(loc="upper right")
 
 
 def plot_state(ax, ds, qubit, fitted=None):
@@ -134,12 +134,12 @@ def add_fit_text(ax, fit):
     tau_us = 1e-3 / decay  # T2* in µs (idle_time is in ns, so decay is in 1/ns)
     tau_err_us = tau_us * (np.sqrt(decay_res) / abs(decay))
     ax.text(
-        0.98,
+        0.02,
         0.98,
         f"T2* = {tau_us:.2f} ± {tau_err_us:.2f} µs",
         transform=ax.transAxes,
         fontsize=10,
         verticalalignment="top",
-        horizontalalignment="right",
+        horizontalalignment="left",
         bbox=dict(facecolor="white", alpha=0.5),
     )
