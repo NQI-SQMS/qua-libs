@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from typing import Callable, ClassVar, Optional
+from typing import Callable, ClassVar, Literal, Optional
 
 from qualang_tools.bakery import baking
 from qualibrate import NodeParameters
@@ -19,10 +19,10 @@ class NodeSpecificParameters(RunnableParameters):
     max_time_in_ns : int
         Maximum flux pulse duration in ns.
     amp_range : float
-        Fractional half-range around the base amplitude (sweep covers
-        ``[1 - amp_range, 1 + amp_range]`` times the base).
+        Absolute half-range, in volts, around each pair's estimated base flux-pulse
+        amplitude (sweep covers ``[base - amp_range, base + amp_range]``).
     amp_step : float
-        Step size for the amplitude scaling sweep.
+        Step size, in volts, for the amplitude sweep.
     use_state_discrimination : bool
         If True, use threshold-based state discrimination; otherwise raw IQ.
     use_saved_detuning : bool
@@ -30,8 +30,11 @@ class NodeSpecificParameters(RunnableParameters):
         (written by node 30) instead of computing it from qubit frequencies.
         Use this for a fast re-run or when node 30 is not in the graph.
     operation : str
-        Pair macro to calibrate and update (e.g. ``"cz_unipolar"``).
+        Pair macro to calibrate and update (e.g. ``"cz_unipolar"`` or ``"iswap_unipolar"``).
         Used when looking up the saved macro amplitude and in state update.
+    cz_or_iswap : Literal["cz", "iswap"]
+        Specifies which entangling interaction is being characterized: controlled-Z ("cz")
+        or iSWAP ("iswap"). Controls preparation, readout, and analysis only.
     """
 
     num_shots: int = 100
@@ -41,6 +44,7 @@ class NodeSpecificParameters(RunnableParameters):
     use_state_discrimination: bool = True
     use_saved_detuning: bool = False
     operation: str = "cz_unipolar"
+    cz_or_iswap: Literal["cz", "iswap"] = "cz"
 
 
 class Parameters(
@@ -57,12 +61,15 @@ def estimate_cz_flux_amplitude(
     qp,
     log_callable: Optional[Callable[[str], None]] = None,
 ) -> float:
-    """Estimate the CZ (11→20) flux-pulse base amplitude for the moving qubit.
+    """Estimate the flux-pulse base amplitude for the moving qubit (CZ or iSWAP).
 
-    Thin wrapper around :func:`estimate_qubit_flux_shift` pinned to the CZ interaction.
+    Thin wrapper around :func:`estimate_qubit_flux_shift`, pinned to whichever interaction
+    ``parameters.cz_or_iswap`` selects.
     """
-    cz_params = SimpleNamespace(use_saved_detuning=parameters.use_saved_detuning, cz_or_iswap="cz")
-    return estimate_qubit_flux_shift(cz_params, qp, log_callable)
+    shift_params = SimpleNamespace(
+        use_saved_detuning=parameters.use_saved_detuning, cz_or_iswap=parameters.cz_or_iswap
+    )
+    return estimate_qubit_flux_shift(shift_params, qp, log_callable)
 
 
 def baked_waveform(qubit, baked_config, base_level: float = 0.5, max_samples: int = 16):

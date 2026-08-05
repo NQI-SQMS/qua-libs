@@ -9,9 +9,11 @@ class NodeSpecificParameters(RunnableParameters):
     num_averages: int = 100
     """Number of averages to perform. Default is 100."""
     amp_range: float = 0.030
-    """Range of amplitude variation around the nominal value, will scan between center - range and center + range. Default is 0.030."""
+    """Absolute half-range, in volts, around each pair's calibrated base flux-pulse amplitude
+    (``qp.macros[operation].flux_pulse_qubit.amplitude``); the sweep covers
+    ``[base - amp_range, base + amp_range]``. Default is 0.030."""
     amp_step: float = 0.001
-    """Step size for amplitude scanning. Default is 0.001."""
+    """Step size, in volts, for the amplitude sweep. Default is 0.001."""
     num_frame_rotations: int = 10
     """Number of frame rotation points for phase measurement. Default is 10."""
     operation: Literal["cz_flattop", "cz_unipolar", "cz_bipolar"] = "cz_unipolar"

@@ -50,7 +50,7 @@ def plot_raw_data_with_fit(
             ax, ds, qp_name, qubit_role, fit_data, qp_map.get(qp_name), qubit_role_obj=qubit_role_obj
         )
 
-    grid.fig.suptitle(f"CZ Chevron — {qubit_role} qubit")
+    grid.fig.suptitle(f"Chevron — {qubit_role} qubit")
     grid.fig.tight_layout()
     return grid.fig
 
@@ -96,7 +96,7 @@ def plot_individual_qubit_chevron(
             if not (np.isnan(cz_len) or np.isnan(cz_amp)):
                 ax.axvline(cz_len, color="red", ls="--", lw=1.2)
                 ax.axhline(cz_amp, color="orange", ls="--", lw=1.2)
-                ax.scatter(cz_len, cz_amp, color="red", marker="*", s=200, zorder=5, label="CZ point")
+                ax.scatter(cz_len, cz_amp, color="red", marker="*", s=200, zorder=5, label="Gate point")
                 ax.legend(fontsize=8)
         except (ValueError, TypeError, AttributeError, KeyError):
             pass

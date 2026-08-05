@@ -158,9 +158,12 @@ Run **30** manually or in a custom graph; graph **99** is for the fixed-coupler 
 
 ## Chevron — fixed coupler (optional for tunable)
 
-[(31_chevron_11_02)](./31_chevron_11_02.py)
+[(31_chevron_11_20)](./31_chevron_11_20.py)
 
-Prepare |11⟩, sweep CZ flux pulse amplitude and duration on the moving qubit. First Chevron fringe → initial duration/amplitude. **Required** on fixed-coupler pairs; **usually skipped** after **30** on tunable-coupler pairs.
+Prepare |11⟩ (CZ) or |10⟩ (iSWAP), sweep the moving-qubit flux pulse amplitude and duration.
+First Chevron fringe → initial duration/amplitude. Set `operation` and `cz_or_iswap` for the
+gate you are calibrating (same convention as **30**). **Required** on fixed-coupler pairs;
+**usually skipped** after **30** on tunable-coupler pairs.
 
 <p align="center">
    <img src="../.img/chevron.png" width="500" alt="Chevron pattern">
@@ -245,7 +248,7 @@ Same phase-compensation objective as **34a**, with a train of CZ operations to a
 | Node    | File                                                                                 | Fixed coupler  |                      Tunable coupler                       |
 | ------- | ------------------------------------------------------------------------------------ | :------------: | :--------------------------------------------------------: |
 | **30**  | [`30_cz_iswap_flux_bootstrap.py`](./30_cz_iswap_flux_bootstrap.py)                   |       —        |                             ✓                              |
-| **31**  | [`31_chevron_11_02.py`](./31_chevron_11_02.py)                                       |       ✓        |                          optional                          |
+| **31**  | [`31_chevron_11_20.py`](./31_chevron_11_20.py)                                       |       ✓        |                          optional                          |
 | **32a** | [`32a_cz_conditional_phase.py`](./32a_cz_conditional_phase.py)                       |       ✓        |                             ✓                              |
 | **32b** | [`32b_cz_conditional_phase_error_amp.py`](./32b_cz_conditional_phase_error_amp.py)   |       ✓        |                             ✓                              |
 | **33a** | [`33a_cz_leakage_amplification.py`](./33a_cz_leakage_amplification.py)               |       —        |                             ✓                              |

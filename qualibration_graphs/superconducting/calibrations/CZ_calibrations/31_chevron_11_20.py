@@ -26,26 +26,32 @@ from quam_config import Quam
 
 # %% {Node_parameters}
 description = """
-CZ |11⟩↔|20⟩ Flux Chevron Calibration
+CZ / iSWAP Flux Chevron Calibration
 
-Measures the time and amplitude required for the CZ gate by sweeping the moving-qubit flux
-pulse amplitude (around the estimated |11⟩↔|20⟩ operating point) and duration (1 ns
-granularity via baking). The resulting 2D Chevron pattern is fitted to extract the optimal gate amplitude and duration.
+Measures the time and amplitude required for the CZ (|11⟩↔|20⟩) or iSWAP (|10⟩↔|01⟩) gate by
+sweeping the moving-qubit flux pulse amplitude and duration (1 ns granularity via baking).
+The amplitude sweep (``amp_range``/``amp_step``) is an absolute offset in volts around each
+pair's own estimated base amplitude, not a fractional scale. The resulting 2D Chevron pattern
+is fitted to extract the optimal gate amplitude and duration. Set ``cz_or_iswap`` for
+preparation/readout/analysis; set ``operation`` to the macro you want to calibrate and update
+in state (e.g. ``cz_unipolar`` or ``iswap_unipolar``).
 
-The |11⟩↔|20⟩ avoided crossing always involves the higher-frequency qubit as the leakage channel
-(2 photons on the high qubit). The moving qubit is the one that tunes to reach the crossing.
+For CZ, the |11⟩↔|20⟩ avoided crossing always involves the higher-frequency qubit as the leakage
+channel (2 photons on the high qubit); the moving qubit is the one that tunes to reach the
+crossing. For iSWAP, the higher-frequency qubit always moves down to meet the lower-frequency
+qubit at the |10⟩↔|01⟩ crossing (δ = 0).
 
-For tunable-coupler architectures the coupler is held at its CZ bias point
+For tunable-coupler architectures the coupler is held at its gate bias point
 (``macros[operation].coupler_flux_pulse.amplitude``) throughout each flux pulse. For fixed-coupler
 architectures no coupler element is needed.
 
 Method
 ------
-1. Prepare |11⟩ by applying x180 to both qubits.
+1. Prepare |11⟩ (CZ: x180 on both qubits) or |10⟩ (iSWAP: x180 on the moving qubit only).
 2. Apply the moving-qubit flux pulse at scaled amplitude and variable duration, bringing it
-   to the |11⟩↔|20⟩ avoided crossing. For tunable couplers, the coupler is simultaneously
-   held at the CZ bias.
-3. Measure both qubits (state discrimination or raw IQ).
+   to the avoided crossing. For tunable couplers, the coupler is simultaneously held at the
+   gate bias.
+3. Measure both qubits (state discrimination — GEF for CZ, standard for iSWAP — or raw IQ).
 4. Fit the 2D population map to a Rabi-Chevron model to extract the resonance amplitude and gate time.
 
 Prerequisites:
@@ -54,12 +60,12 @@ Prerequisites:
 - Initial estimate of the coupler flux amplitude in case of tunable couplers.
 
 Outcomes:
-- Optimal flux pulse amplitude and duration for the CZ gate.
+- Optimal flux pulse amplitude and duration for the selected gate.
 - Fitted Chevron pattern for visualization and verification.
 
 State update:
 - Updates the amplitude and duration of the flux pulse in ``macros[operation]``
-  to the fitted CZ values (duration rounded up to the next multiple of 4 ns).
+  to the fitted values (duration rounded up to the next multiple of 4 ns).
 """
 
 # Be sure to include [Parameters, Quam] so the node has proper type hinting
@@ -99,11 +105,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     for qp in qubit_pairs:
         verify_moving_qubit(
             qp,
+            node.parameters.cz_or_iswap,
             operation=node.parameters.operation,
             repair_routing=True,
             log_callable=node.log,
         )
-        qubit_roles_map[qp.name] = QubitRoles.resolve(qp)
+        qubit_roles_map[qp.name] = QubitRoles.resolve(qp, node.parameters.cz_or_iswap)
     node.namespace["qubit_roles_map"] = qubit_roles_map
 
     # define the amplitudes for the flux pulses
@@ -116,13 +123,14 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     # The number of averages
     n_avg = node.parameters.num_shots
 
-    # Loop parameters
-    amplitudes = np.arange(1 - node.parameters.amp_range, 1 + node.parameters.amp_range, node.parameters.amp_step)
+    # Loop parameters. `amplitudes` is an absolute flux-pulse amplitude offset (in volts),
+    # applied on top of each pair's own estimated base amplitude (see `pulse_amplitudes` below).
+    amplitudes = np.arange(-node.parameters.amp_range, node.parameters.amp_range, node.parameters.amp_step)
     times_cycles = np.arange(1, node.parameters.max_time_in_ns)
 
     node.namespace["sweep_axes"] = {
         "qubit_pair": xr.DataArray(qubit_pairs.get_names()),
-        "amplitude": xr.DataArray(amplitudes, attrs={"long_name": "amplitudes of the flux pulse"}),
+        "amplitude": xr.DataArray(amplitudes, attrs={"long_name": "flux pulse amplitude offset", "units": "V"}),
         "time": xr.DataArray(times_cycles, attrs={"long_name": "pulse duration", "units": "ns"}),
     }
 
@@ -191,11 +199,22 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             mq.reset(node.parameters.reset_type, node.parameters.simulate)
                             sq.reset(node.parameters.reset_type, node.parameters.simulate)
                             align()
-                            # set both qubits to the excited state to prepare |11⟩
+                            # Prepare |11⟩ (CZ) or |10⟩ (iSWAP): the moving qubit is always excited;
+                            # the stationary qubit joins only for CZ, which needs both photons present
+                            # to reach the |11⟩↔|20⟩ crossing.
                             mq.xy.play("x180")
-                            sq.xy.play("x180")
+                            if node.parameters.cz_or_iswap == "cz":
+                                sq.xy.play("x180")
 
                             align()
+
+                            # `a` is an absolute flux-pulse amplitude offset (V) around this pair's own
+                            # estimated base amplitude `p`; convert to the multiplicative scales that QUA
+                            # baking/play need (`a_scale` for baked segments, `scale` for "const" pulses).
+                            p = pulse_amplitudes[qp.name]
+                            denom = mq.z.operations["const"].amplitude
+                            a_scale = (p + a) / p
+                            scale = (p + a) / denom
 
                             if has_coupler[qp.name]:
                                 coupler_scale = coupler_amplitudes[qp.name] / qp.coupler.operations["const"].amplitude
@@ -206,7 +225,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                     # Switch case to select the baked pulse with duration t ns
                                     for j in range(1, 17):
                                         with case_(j):
-                                            baked_signals[qp.name][j - 1].run(amp_array=[(mq.z.name, a)])
+                                            baked_signals[qp.name][j - 1].run(amp_array=[(mq.z.name, a_scale)])
                                             if has_coupler[qp.name]:
                                                 # Coupler only needs to hold the CZ bias level — 4 ns granularity is sufficient.
                                                 # ceil(j/4) cycles ensures the hold covers the full j ns qubit baked pulse.
@@ -225,9 +244,6 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                     # Play only the pulse multiple of 4
                                     with case_(0):
                                         align()
-                                        p = pulse_amplitudes[qp.name]
-                                        denom = mq.z.operations["const"].amplitude
-                                        scale = (p / denom) * a
                                         mq.z.play(
                                             "const",
                                             duration=t_cycles,
@@ -239,25 +255,29 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                     for j in range(1, 4):
                                         with case_(j):
                                             align()
-                                            p = pulse_amplitudes[qp.name]
-                                            denom = mq.z.operations["const"].amplitude
-                                            scale = (p / denom) * a
                                             if has_coupler[qp.name]:
                                                 qp.coupler.play(
                                                     "const", duration=t_cycles + 1, amplitude_scale=coupler_scale
                                                 )
-                                            with strict_timing_():
-                                                mq.z.play(
-                                                    "const",
-                                                    duration=t_cycles,
-                                                    amplitude_scale=scale,
-                                                )
-                                                baked_signals[qp.name][j - 1].run(amp_array=[(mq.z.name, a)])
+                                            # Not wrapped in strict_timing_(): both ops below use QUA-variable
+                                            # duration/amplitude, so the FPGA needs a couple of cycles to compute
+                                            # them in real time — a fully gapless join is not achievable here, and
+                                            # strict_timing_() would hard-error on that unavoidable gap.
+                                            mq.z.play(
+                                                "const",
+                                                duration=t_cycles,
+                                                amplitude_scale=scale,
+                                            )
+                                            baked_signals[qp.name][j - 1].run(amp_array=[(mq.z.name, a_scale)])
                             align()
 
                             if node.parameters.use_state_discrimination:
-                                mq.readout_state_gef(state_mq[ii])
-                                sq.readout_state_gef(state_sq[ii])
+                                if node.parameters.cz_or_iswap == "cz":
+                                    mq.readout_state_gef(state_mq[ii])
+                                    sq.readout_state_gef(state_sq[ii])
+                                else:
+                                    mq.readout_state(state_mq[ii])
+                                    sq.readout_state(state_sq[ii])
                                 save(state_mq[ii], state_mq_st[ii])
                                 save(state_sq[ii], state_sq_st[ii])
                             else:

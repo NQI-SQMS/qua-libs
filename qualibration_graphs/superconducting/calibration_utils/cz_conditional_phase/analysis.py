@@ -113,10 +113,11 @@ def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
     operation = node.parameters.operation
 
     def abs_amp(qp, amp):
-        return amp * qp.macros[operation].flux_pulse_qubit.amplitude
+        # `amp` is an absolute flux-pulse amplitude offset (V) around the pair's calibrated base amplitude.
+        return amp + qp.macros[operation].flux_pulse_qubit.amplitude
 
     def detuning(qp, amp):
-        amplitude_squared = (amp * qp.macros[operation].flux_pulse_qubit.amplitude) ** 2
+        amplitude_squared = abs_amp(qp, amp) ** 2
         return -amplitude_squared * node.namespace["qubit_roles_map"][qp.name].moving.freq_vs_flux_01_quad_term
 
     ds = ds.assign_coords({"amp_full": (["qubit_pair", "amp"], np.array([abs_amp(qp, ds.amp) for qp in qubit_pairs]))})

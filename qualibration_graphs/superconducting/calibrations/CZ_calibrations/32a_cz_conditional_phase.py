@@ -28,15 +28,17 @@ from quam_config import Quam
 description = """
 CZ controlled-phase (CPhase) calibration
 
-Calibrates the CZ gate phase by scanning the flux-pulse amplitude scale on the moving qubit
+Calibrates the CZ gate phase by scanning the flux-pulse amplitude on the moving qubit
 (the qubit flux-pulsed toward the |11⟩↔|20⟩ avoided crossing) and measuring the conditional
-phase acquired by the stationary qubit.
+phase acquired by the stationary qubit. The amplitude sweep (``amp_range``/``amp_step``) is
+an absolute offset in volts around the pair's own calibrated base amplitude, not a fractional
+scale (consistent with node 31's chevron).
 
 Protocol
 --------
 1. Prepare the stationary qubit in a superposition (x90).
 2. Prepare the moving qubit in |g⟩ or |e⟩ (two ``control_axis`` points).
-3. Apply ``macros[operation]`` at scaled amplitude.
+3. Apply ``macros[operation]`` at the offset amplitude.
 4. Perform frame tomography on the stationary qubit (frame rotation + x90).
 5. Fit the stationary-qubit |e⟩-state oscillation vs. frame for each moving-qubit state.
 
@@ -94,9 +96,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
         qubit_roles_map[qp.name] = QubitRoles.resolve(qp)
     node.namespace["qubit_roles_map"] = qubit_roles_map
 
-    # Extract the sweep parameters and axes from the node parameters
+    # Extract the sweep parameters and axes from the node parameters. `amplitudes` is an absolute
+    # flux-pulse amplitude offset (in volts), applied on top of each pair's own calibrated base
+    # amplitude (`qp.macros[operation].flux_pulse_qubit.amplitude`), consistent with node 31's chevron.
     n_avg = node.parameters.num_averages
-    amplitudes = np.arange(1 - node.parameters.amp_range, 1 + node.parameters.amp_range, node.parameters.amp_step)
+    amplitudes = np.arange(-node.parameters.amp_range, node.parameters.amp_range, node.parameters.amp_step)
     frames = np.arange(0, 1, 1 / node.parameters.num_frame_rotations)
 
     # Select the CZ operation type
@@ -105,7 +109,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     # Register the sweep axes to be added to the dataset when fetching data
     node.namespace["sweep_axes"] = {
         "qubit_pair": xr.DataArray(qubit_pairs.get_names()),
-        "amp": xr.DataArray(amplitudes, attrs={"long_name": "amplitude scale", "units": "a.u."}),
+        "amp": xr.DataArray(amplitudes, attrs={"long_name": "flux pulse amplitude offset", "units": "V"}),
         "frame": xr.DataArray(frames, attrs={"long_name": "frame rotation", "units": "2π"}),
         "control_axis": xr.DataArray([0, 1], attrs={"long_name": "control qubit state"}),
     }
@@ -165,8 +169,12 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                 mq.xy.play("x180", condition=moving_initial == 1)
                                 sq.xy.play("x90")
                                 qp.align()
-                                # play the CZ gate
-                                qp.macros[operation].apply(amplitude_scale_qubit=amp)
+                                # play the CZ gate. `amp` is an absolute flux-pulse amplitude offset (V)
+                                # around this pair's own calibrated base amplitude `p`; convert to the
+                                # multiplicative scale that `apply(amplitude_scale_qubit=...)` expects.
+                                p = qp.macros[operation].flux_pulse_qubit.amplitude
+                                amp_scale = (p + amp) / p
+                                qp.macros[operation].apply(amplitude_scale_qubit=amp_scale)
                                 # rotate the frame
                                 sq.xy.frame_rotation_2pi(frame)
                                 # Tomographic rotation on the other qubit

@@ -39,7 +39,7 @@ def rabi_chevron_model(ft, J, f0, a, offset):
     return g.ravel()
 
 
-def fit_rabi_chevron(ds_qp, init_length, init_detuning):
+def fit_rabi_chevron(ds_qp, init_length, init_detuning, cz_or_iswap="cz"):
     """Fit the Rabi-Chevron data for one qubit pair using ``rabi_chevron_model``.
 
     Parameters:
@@ -51,6 +51,11 @@ def fit_rabi_chevron(ds_qp, init_length, init_detuning):
         Initial guess for the gate length (ns), used to seed ``J = 1e9/init_length``.
     init_detuning : array-like
         Initial guess for the resonance detuning ``f0`` (Hz).
+    cz_or_iswap : str
+        ``"cz"`` (default) or ``"iswap"``. Selects the initial guess for the oscillation
+        amplitude/offset: CZ chevron watches ``state_stationary`` dip 1→0 (leakage draining
+        the stationary qubit), iSWAP watches it rise 0→1 (population transferred in from the
+        moving qubit).
 
     Returns:
     --------
@@ -68,7 +73,10 @@ def fit_rabi_chevron(ds_qp, init_length, init_detuning):
         detuning = da_target.detuning[0]
         time = da_target.time * 1e-9
         t, f = np.meshgrid(time, detuning)
-        initial_guess = (1e9 / init_length, init_detuning[0], -1, 1.0)
+        if cz_or_iswap == "iswap":
+            initial_guess = (1e9 / init_length, init_detuning[0], 1.0, 0.0)
+        else:
+            initial_guess = (1e9 / init_length, init_detuning[0], -1, 1.0)
         fdata = np.vstack((f.ravel(), t.ravel()))
         tdata = exp_data.ravel()
         popt, pcov = curve_fit(rabi_chevron_model, fdata, tdata, p0=initial_guess)
@@ -138,19 +146,19 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
         s_qubit += "SUCCESS!\n" if success else "FAIL!\n"
 
         if isinstance(cz_len_val, (int, float)) and cz_len_val not in (None, np.nan):
-            cz_len_str = f"\tOptimal CZ duration: {int(cz_len_val)} ns"
+            cz_len_str = f"\tOptimal gate duration: {int(cz_len_val)} ns"
         else:
-            cz_len_str = "\tOptimal CZ duration: N/A"
+            cz_len_str = "\tOptimal gate duration: N/A"
 
         if isinstance(cz_amp_val, (int, float)) and not np.isnan(cz_amp_val):
-            cz_amp_str = f"\tOptimal CZ amplitude: {cz_amp_val:.6f} V"
+            cz_amp_str = f"\tOptimal gate amplitude: {cz_amp_val:.6f} V"
         else:
-            cz_amp_str = "\tOptimal CZ amplitude: N/A"
+            cz_amp_str = "\tOptimal gate amplitude: N/A"
 
         log_callable(s_qubit + cz_len_str + "\n" + cz_amp_str)
 
 
-def fit_chevron_cz(ds, dim):
+def fit_chevron_cz(ds, dim, cz_or_iswap="cz"):
     """Fit the Rabi-Chevron pattern for every qubit pair using a groupby-apply loop.
 
     For each pair the routine:
@@ -165,6 +173,9 @@ def fit_chevron_cz(ds, dim):
         ``detuning``, ``amp_full``, and ``quad_term_moving`` coordinates.
     dim : str
         Dimension name to group by (``"qubit_pair"``).
+    cz_or_iswap : str
+        ``"cz"`` (default) or ``"iswap"``. Forwarded to ``fit_rabi_chevron`` to select the
+        correct oscillation initial guess.
 
     Returns:
     --------
@@ -200,7 +211,7 @@ def fit_chevron_cz(ds, dim):
             t = ds_qp.time * 1e-9
             f = ds_qp.detuning
             t, f = np.meshgrid(t, f)
-            J, f0, a, offset = fit_rabi_chevron(ds_qp, lengths * 2, detunings.values)
+            J, f0, a, offset = fit_rabi_chevron(ds_qp, lengths * 2, detunings.values, cz_or_iswap=cz_or_iswap)
 
             # Check if fitting produced valid results
             if np.isnan(J) or np.isnan(f0):
@@ -245,14 +256,14 @@ def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
         Dataset with the additional coordinates described above.
     """
 
-    def detuning(qp, amp):
-        return (
-            -((amp * node.namespace["pulse_amplitudes"][qp.name]) ** 2)
-            * node.namespace["qubit_roles_map"][qp.name].moving.freq_vs_flux_01_quad_term
-        )
+    def detuning(qp, amp_offset):
+        # `amp_offset` is the swept absolute flux-pulse amplitude offset (V) around this
+        # pair's estimated base amplitude.
+        base = node.namespace["pulse_amplitudes"][qp.name]
+        return -((base + amp_offset) ** 2) * node.namespace["qubit_roles_map"][qp.name].moving.freq_vs_flux_01_quad_term
 
-    def abs_amp(qp, amp):
-        return amp * node.namespace["pulse_amplitudes"][qp.name]
+    def abs_amp(qp, amp_offset):
+        return node.namespace["pulse_amplitudes"][qp.name] + amp_offset
 
     qubit_pairs = [node.machine.qubit_pairs[pair] for pair in node.parameters.qubit_pairs]
 
@@ -294,7 +305,7 @@ def fit_raw_data(ds: xr.Dataset, node: QualibrationNode) -> Tuple[xr.Dataset, di
         Dataset containing the fit results and dictionary of fit parameters for each qubit pair.
     """
 
-    ds_fit_res = fit_chevron_cz(ds, "qubit_pair")
+    ds_fit_res = fit_chevron_cz(ds, "qubit_pair", cz_or_iswap=node.parameters.cz_or_iswap)
 
     ds_fit = xr.merge([ds, ds_fit_res.rename("fit")])
 
