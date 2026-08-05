@@ -39,9 +39,8 @@ class Parameters(
 
         - If `log_scale` is True, depths follow a logarithmic progression:
           1, 2, 4, 8, 16, 32, ... up to `max_circuit_depth`.
-        - If `log_scale` is False, depths are linearly spaced using
-          `delta_clifford` until `max_circuit_depth`. The first value is
-          always set to 1.
+        - If `log_scale` is False, depths are linearly spaced from
+          `delta_clifford` to `max_circuit_depth` in steps of `delta_clifford`.
 
         Returns:
             numpy.ndarray: An array of circuit depths (integers).
@@ -59,7 +58,7 @@ class Parameters(
             ...                     max_circuit_depth=10,
             ...                     delta_clifford=2)
             >>> params.get_depths()
-            array([ 1,  2,  4,  6,  8, 10])
+            array([ 2,  4,  6,  8, 10])
         """
         # Generate depth list based on log_scale parameter
         if self.log_scale:
@@ -75,6 +74,5 @@ class Parameters(
             assert (
                 self.max_circuit_depth / self.delta_clifford
             ).is_integer(), "max_circuit_depth / delta_clifford must be an integer."
-            depths = np.arange(0, self.max_circuit_depth + 0.1, self.delta_clifford, dtype=int)
-            depths[0] = 1  # Ensure we start with depth 1
+            depths = np.arange(self.delta_clifford, self.max_circuit_depth + 0.1, self.delta_clifford, dtype=int)
         return depths
