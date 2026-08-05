@@ -80,7 +80,7 @@ def fit_raw_data(ds: xr.Dataset, node: QualibrationNode) -> Tuple[xr.Dataset, di
     ds_fit = ds
 
     # Get the readout detuning as the index of the maximum of the cumulative average of D
-    ds_fit["optimal_index"] = ds_fit.D.rolling({"detuning": 5}).mean("detuning").argmax("detuning")
+    ds_fit["optimal_index"] = ds_fit.D.rolling({"detuning": 5}, center=True).mean("detuning").argmax("detuning")
     ds_fit["optimal_detuning"] = ds_fit.detuning.isel(detuning=ds_fit["optimal_index"])
     ds_fit["optimal_frequency"] = ds_fit.full_freq.isel(detuning=ds_fit["optimal_index"])
     # Get the dispersive shift as the distance between the resonator frequency when the qubit is in |g> and |e>
