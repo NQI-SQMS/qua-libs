@@ -29,11 +29,11 @@ from scipy.optimize import curve_fit
 
 from qualibrate import QualibrationNode
 from qualibration_libs.data import convert_IQ_to_V
-try:
-    from qualibration_libs.data import apply_confusion_correction_to_dataset
-    _HAS_CONFUSION_CORRECTION = True
-except ImportError:
-    _HAS_CONFUSION_CORRECTION = False
+from calibration_utils.shared import apply_confusion_matrix_correction
+
+
+def apply_confusion_correction_to_dataset(ds, node):
+    return apply_confusion_matrix_correction(ds, node.namespace["qubits"])
 from qualibration_libs.analysis.models import oscillation_decay_exp as _osc_decay
 
 
@@ -68,17 +68,8 @@ def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode) -> xr.Dataset:
     """Convert I/Q to Volts, or build a 'state' DataArray from stateN variables."""
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, node.namespace["qubits"])
-    elif _HAS_CONFUSION_CORRECTION:
-        ds = apply_confusion_correction_to_dataset(ds, node)
     else:
-        qubits = node.namespace["qubits"]
-        state_arrays = [
-            ds[f"state{i}"].assign_coords(qubit=q.name)
-            for i, q in enumerate(qubits, start=1)
-            if f"state{i}" in ds
-        ]
-        if state_arrays:
-            ds = ds.assign(state=xr.concat(state_arrays, dim="qubit"))
+        ds = apply_confusion_correction_to_dataset(ds, node)
     return ds
 
 

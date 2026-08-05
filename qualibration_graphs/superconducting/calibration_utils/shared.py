@@ -25,7 +25,7 @@ def apply_confusion_matrix_correction(ds: xr.Dataset, qubits) -> xr.Dataset:
     for q_name, cm_inv in cm_inv_map.items():
         s = ds.state.sel(qubit=q_name).values.astype(float)
         p_meas = np.stack([1.0 - s, s], axis=-1)
-        p_true = (cm_inv @ p_meas.T).T
+        p_true = np.einsum("jk,...k->...j", cm_inv, p_meas)
         corrected.loc[dict(qubit=q_name)] = p_true[..., 1]
     return ds.assign(state=corrected)
 
