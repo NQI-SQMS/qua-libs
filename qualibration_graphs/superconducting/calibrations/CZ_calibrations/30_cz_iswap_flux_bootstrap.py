@@ -59,6 +59,9 @@ Notes
 - ``analysis_debug`` — optional 1D contrast-cut figure in ``plot_data`` (diagnostic only).
 - ``analysis_fit_preset`` — ``default`` (normal sweep/SNR), ``noisy`` (poor SNR), or
   ``coarse`` (wide exploratory coupler scan).
+- When ``use_state_discrimination`` is False, ``plot_data`` produces separate I and Q
+  landscape figures (``stationary_I``, ``stationary_Q``, ``moving_I``, ``moving_Q``)
+  instead of the single ``stationary``/``moving`` state figures.
 
 """
 
@@ -329,12 +332,7 @@ def plot_data(node: QualibrationNode[Parameters, Quam]):
         cz_or_iswap=node.parameters.cz_or_iswap,
     )
     plt.show()
-    node.results["figures"] = {
-        "stationary": figs["stationary"],
-        "moving": figs["moving"],
-    }
-    if "contrast_debug" in figs:
-        node.results["figures"]["contrast_debug"] = figs["contrast_debug"]
+    node.results["figures"] = dict(figs)
 
 
 # %% {Update_state}

@@ -110,7 +110,10 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     )
 
     key = cache_key(
-        node.parameters.seed, circuit_depths, node.parameters.num_circuits_per_depth
+        node.parameters.seed,
+        circuit_depths,
+        node.parameters.num_circuits_per_depth,
+        reduce_to_1q_cliffords=node.parameters.reduce_to_1q_cliffords,
     )  # key to cache the RB circuits
     cache_dir = Path(__file__).resolve().parents[2] / ".rb_cache"
     cached = try_load(cache_dir, key)  # try to load the cached RB circuits
@@ -130,6 +133,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             num_circuits_per_length=node.parameters.num_circuits_per_depth,
             num_qubits=2,
             seed=node.parameters.seed,
+            reduce_to_1q_cliffords=node.parameters.reduce_to_1q_cliffords,
         )
 
         transpiled_circuits = standard_RB.transpiled_circuits  # transpile the circuits
@@ -266,6 +270,7 @@ def load_data(node: QualibrationNode[Parameters, Quam]):
             node.parameters.seed,
             node.namespace["circuit_depths"],
             node.parameters.num_circuits_per_depth,
+            reduce_to_1q_cliffords=node.parameters.reduce_to_1q_cliffords,
         ),
     )
     if cached is not None:

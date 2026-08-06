@@ -35,6 +35,12 @@ class NodeSpecificParameters(RunnableParameters):
     """Number of random circuits sampled per circuit length. Default is 5."""
     seed: int = 0
     """Random seed for circuit generation to ensure reproducibility. Default is 0."""
+    reduce_to_1q_cliffords: bool = False
+    """Debug/diagnostic switch. When True, each "2Q Clifford" is instead the product of two
+    independent single-qubit Cliffords (no cz gates at all), while the rest of the pipeline
+    (transpile, circuit encoding, switch_case execution, readout, fit) is unchanged. Used to
+    isolate whether a bad RB result comes from the CZ gate itself or from the surrounding RB
+    software path: if this also decays to baseline, the bug is not in the CZ gate."""
     use_input_stream: bool = False
     """Whether to use input streams for circuit execution. Default is False.
     When True, the gate sequences are streamed to the OPX chunk-by-chunk via the

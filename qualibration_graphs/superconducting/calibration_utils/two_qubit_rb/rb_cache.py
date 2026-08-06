@@ -21,11 +21,14 @@ def cache_key(
     num_circuits_per_depth: int,
     *,
     target_gate: str | None = None,
+    reduce_to_1q_cliffords: bool = False,
 ) -> str:
     """Return a hex SHA-256 digest that uniquely identifies an RB config.
 
     When *target_gate* is supplied the hash includes it, so standard and
-    interleaved caches never collide.
+    interleaved caches never collide. *reduce_to_1q_cliffords* is likewise
+    included so the single-qubit-only diagnostic circuits never collide with
+    a real-CZ cache entry generated from the same seed/depths/count.
     """
     blob_dict = {
         "seed": seed,
@@ -34,6 +37,8 @@ def cache_key(
     }
     if target_gate is not None:
         blob_dict["target_gate"] = target_gate
+    if reduce_to_1q_cliffords:
+        blob_dict["reduce_to_1q_cliffords"] = True
     blob = json.dumps(blob_dict, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
 

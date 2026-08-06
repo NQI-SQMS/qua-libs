@@ -41,31 +41,41 @@ def plot_raw_data_with_fit(
     Returns
     -------
     dict[str, Figure]
-        At least ``"stationary"`` and ``"moving"``; optionally ``"contrast_debug"``.
+        When state discrimination data is available: ``"stationary"`` and ``"moving"``.
+        Otherwise (raw IQ): ``"stationary_I"``, ``"stationary_Q"``, ``"moving_I"``, and
+        ``"moving_Q"``. Optionally also ``"contrast_debug"``.
     """
     pair_by_name = {qp.name: qp for qp in qubit_pairs}
     grid_names, pair_names = grid_pair_names(qubit_pairs)
     figures: Dict[str, Figure] = {}
 
-    for state_type in ("stationary", "moving"):
-        grid = QubitPairGrid(grid_names, pair_names)
-        for ax, qubit in grid_iter(grid):
-            qp_name = qubit["qubit"]
-            fit_data = fits.get(qp_name) if fits else None
-            plot_individual_data_with_fit(
-                ax,
-                ds,
-                qubit,
-                fit_data,
-                data_var=state_type,
-                qubit_pair_obj=pair_by_name.get(qp_name),
-                qubit_role=qubit_roles_map.get(qp_name) if qubit_roles_map else None,
-                cz_or_iswap=cz_or_iswap,
-            )
+    has_state = "state_moving" in ds and "state_stationary" in ds
+    quadratures = [None] if has_state else ["I", "Q"]
 
-        grid.fig.suptitle(f"{'CZ' if cz_or_iswap == 'cz' else 'iSWAP'} flux landscape ({state_type})")
-        grid.fig.tight_layout()
-        figures[state_type] = grid.fig
+    for state_type in ("stationary", "moving"):
+        for quadrature in quadratures:
+            grid = QubitPairGrid(grid_names, pair_names)
+            for ax, qubit in grid_iter(grid):
+                qp_name = qubit["qubit"]
+                fit_data = fits.get(qp_name) if fits else None
+                plot_individual_data_with_fit(
+                    ax,
+                    ds,
+                    qubit,
+                    fit_data,
+                    data_var=state_type,
+                    quadrature=quadrature,
+                    qubit_pair_obj=pair_by_name.get(qp_name),
+                    qubit_role=qubit_roles_map.get(qp_name) if qubit_roles_map else None,
+                    cz_or_iswap=cz_or_iswap,
+                )
+
+            title = f"{'CZ' if cz_or_iswap == 'cz' else 'iSWAP'} flux landscape ({state_type}"
+            title += ")" if quadrature is None else f", {quadrature})"
+            grid.fig.suptitle(title)
+            grid.fig.tight_layout()
+            key = state_type if quadrature is None else f"{state_type}_{quadrature}"
+            figures[key] = grid.fig
 
     if analysis_debug:
         figures["contrast_debug"] = plot_contrast_cut_debug(ds, qubit_pairs, fits, cz_or_iswap=cz_or_iswap)
@@ -79,6 +89,7 @@ def plot_individual_data_with_fit(
     qubit: dict[str, str],
     fit: Optional[Dict] = None,
     data_var: str = "stationary",
+    quadrature: Optional[str] = None,
     qubit_pair_obj=None,
     qubit_role=None,
     cz_or_iswap: str = "cz",
@@ -97,6 +108,10 @@ def plot_individual_data_with_fit(
         Fit result dict for this pair (from ``fit_results``).
     data_var : str
         ``"stationary"`` or ``"moving"`` readout to display.
+    quadrature : str, optional
+        ``"I"`` or ``"Q"`` to select the raw-IQ variable (e.g. ``I_moving``); ignored
+        (and unnecessary) when state-discrimination data (``state_moving`` /
+        ``state_stationary``) is present in ``ds``.
     qubit_pair_obj : optional
         QUAM pair object; used to draw the current ``decouple_offset`` for reference.
     cz_or_iswap : str
@@ -104,16 +119,12 @@ def plot_individual_data_with_fit(
     """
     qubit_pair = qubit["qubit"]
 
-    if data_var == "moving":
-        if "state_moving" in ds:
-            data = ds.state_moving.sel(qubit_pair=qubit_pair)
-        else:
-            data = ds.I_moving.sel(qubit_pair=qubit_pair)
+    state_var = f"state_{data_var}"
+    if state_var in ds:
+        data = ds[state_var].sel(qubit_pair=qubit_pair)
     else:
-        if "state_stationary" in ds:
-            data = ds.state_stationary.sel(qubit_pair=qubit_pair)
-        else:
-            data = ds.I_stationary.sel(qubit_pair=qubit_pair)
+        iq_var = f"{quadrature or 'I'}_{data_var}"
+        data = ds[iq_var].sel(qubit_pair=qubit_pair)
 
     data.assign_coords(
         {
@@ -175,11 +186,12 @@ def plot_individual_data_with_fit(
             )
             has_legend = True
 
+    quad_suffix = f" [{quadrature}]" if state_var not in ds and quadrature else ""
     if qubit_role is not None:
         qb = qubit_role.moving if data_var == "moving" else qubit_role.stationary
-        ax.set_title(f"{qubit_pair} \n {data_var} qubit ({qb.name})")
+        ax.set_title(f"{qubit_pair} \n {data_var} qubit ({qb.name}){quad_suffix}")
     else:
-        ax.set_title(f"{qubit_pair} ({data_var})")
+        ax.set_title(f"{qubit_pair} ({data_var}){quad_suffix}")
 
     if has_legend:
         ax.legend(fontsize=7, loc="upper right")
