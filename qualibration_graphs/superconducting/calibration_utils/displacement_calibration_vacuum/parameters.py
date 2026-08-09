@@ -24,14 +24,18 @@ class NodeSpecificParameters(RunnableParameters):
     """Qubit π-pulse operation to use for the vacuum-state probe.
     'selective_x180' — spectrally narrow, flips qubit only when cavity is in |0⟩.
     'x180'           — broadband π-pulse (use when selective_x180 is not yet calibrated)."""
-    cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
+    cavity_reset_type: Literal["thermal", "active_sideband", "active_sideband_v2"] = "thermal"
     """How to reset the cavity before each displacement.
-    'thermal'         — passive decay (wait thermalization_time_factor × T1).
-    'active_sideband' — drive f0g1 π-pulses to actively remove photons; requires a
-                        calibrated f0g1_pi on the sideband_drive of the CavityTransmonPair."""
+    'thermal'           — passive decay (wait thermalization_time_factor × T1).
+    'active_sideband'   — drive f0g1 π-pulses to actively remove photons; requires a
+                          calibrated f0g1_pi on the sideband_drive of the CavityTransmonPair.
+    'active_sideband_v2'— long SB pulse then N×(GEF reset → f0g1 π → GEF reset) per Fock level."""
     cavity_active_cooling_fock_n: int = 1
     """Starting Fock level for active sideband cooling (used only when
-    cavity_reset_type='active_sideband'). Set to 1 for thermal state cooling."""
+    cavity_reset_type='active_sideband' or 'active_sideband_v2'). Set to 1 for thermal state cooling."""
+    cavity_active_cooling_n_repeats: int = 3
+    """Number of (GEF-reset → f0g1-π → GEF-reset) cycles per Fock level.
+    Only used when cavity_reset_type='active_sideband_v2'."""
     sideband_pulse_duration_ns: Optional[int] = None
     """Override the f0g1 sideband pulse duration [ns] during active cooling.
     When None (default), the calibrated f0g1_pi pulse length is used.

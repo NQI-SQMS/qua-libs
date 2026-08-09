@@ -126,83 +126,96 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
     n_avg = node.parameters.num_shots
 
-    with program() as node.namespace["qua_program"]:
-        n = declare(int)
-        n_st = declare_stream()
-        tau_clk_v = declare(int)
+    def _build_program(polarity: int):
+        with program() as prog:
+            n = declare(int)
+            n_st = declare_stream()
+            tau_clk_v = declare(int)
 
-        I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
-        if node.parameters.use_state_discrimination:
-            state    = [declare(int)     for _ in range(num_qubits)]
-            state_st = [declare_stream() for _ in range(num_qubits)]
+            I, I_st, Q, Q_st, _, _ = node.machine.declare_qua_variables()
+            if node.parameters.use_state_discrimination:
+                state    = [declare(int)     for _ in range(num_qubits)]
+                state_st = [declare_stream() for _ in range(num_qubits)]
 
-        for multiplexed_qubits in qubits.batch():
-            for qubit in multiplexed_qubits.values():
-                node.machine.initialize_qpu(target=qubit)
+            for multiplexed_qubits in qubits.batch():
+                for qubit in multiplexed_qubits.values():
+                    node.machine.initialize_qpu(target=qubit)
 
-            with for_(n, 0, n < n_avg, n + 1):
-                save(n, n_st)
+                with for_(n, 0, n < n_avg, n + 1):
+                    save(n, n_st)
 
-                with for_each_(tau_clk_v, tau_clk.tolist()):
+                    with for_each_(tau_clk_v, tau_clk.tolist()):
 
-                    # -- Reset -------------------------------------------------
-                    sd = node.namespace["sideband_drive"]
-                    for i, qubit in multiplexed_qubits.items():
-                        pair_key = f"{qubit.name}_{node.parameters.mode_name}"
-                        _pairs = getattr(node.machine, "cavity_transmon_pairs", None)
-                        _chi = float(_pairs[pair_key].chi) if (_pairs and pair_key in _pairs and _pairs[pair_key].chi is not None) else None
-                        cavity_mode.reset(
-                            node.parameters.cavity_reset_type,
-                            node.parameters.simulate,
-                            log_callable=node.log,
-                            sideband_drive=sd,
-                            qubit_thermalization_time=qubit.thermalization_time,
-                            fock_n=node.parameters.cavity_active_cooling_fock_n,
-                            sideband_pulse_duration_ns=node.parameters.sideband_pulse_duration_ns,
-                            chi_hz=_chi,
-                        )
-                        qubit.reset(
-                            node.parameters.reset_type,
-                            node.parameters.simulate,
-                            log_callable=node.log,
-                        )
-
-                    # -- Fock |1> preparation via f0g1 sideband ladder --------
-                    align()
-                    node.namespace["pair"].fock_prep_qua(1, qubit)
-
-                    # -- Reset qubit to bare GE frequency (n=0) ---------------
-                    align()
-                    qubit.xy.update_frequency(node.namespace["base_qubit_if"])
-
-                    # -- Standard Ramsey: x90 -> wait(tau) -> x90 -------------
-                    for i, qubit in multiplexed_qubits.items():
-                        align(qubit.xy.name)
-                    with strict_timing_():
+                        # -- Reset -------------------------------------------------
+                        sd = node.namespace["sideband_drive"]
                         for i, qubit in multiplexed_qubits.items():
-                            qubit.xy.play("x90")
-                        for i, qubit in multiplexed_qubits.items():
-                            wait(tau_clk_v, qubit.xy.name)
-                        for i, qubit in multiplexed_qubits.items():
-                            qubit.xy.play("x90")
+                            pair_key = f"{qubit.name}_{node.parameters.mode_name}"
+                            _pairs = getattr(node.machine, "cavity_transmon_pairs", None)
+                            _chi = float(_pairs[pair_key].chi) if (_pairs and pair_key in _pairs and _pairs[pair_key].chi is not None) else None
+                            _cavity_reset_kwargs = dict(
+                                sideband_drive=sd,
+                                qubit_thermalization_time=qubit.thermalization_time,
+                                fock_n=node.parameters.cavity_active_cooling_fock_n,
+                                sideband_pulse_duration_ns=node.parameters.sideband_pulse_duration_ns,
+                                chi_hz=_chi,
+                            )
+                            if node.parameters.cavity_reset_type == "active_sideband_v2":
+                                _cavity_reset_kwargs.update(
+                                    qubit=qubit,
+                                    n_repeats=node.parameters.cavity_active_cooling_n_repeats,
+                                )
+                            cavity_mode.reset(
+                                node.parameters.cavity_reset_type,
+                                node.parameters.simulate,
+                                log_callable=node.log,
+                                **_cavity_reset_kwargs,
+                            )
+                            qubit.reset(
+                                node.parameters.reset_type,
+                                node.parameters.simulate,
+                                log_callable=node.log,
+                            )
 
-                    # -- Measure -----------------------------------------------
-                    for i, qubit in multiplexed_qubits.items():
-                        align(qubit.xy.name, qubit.resonator.name)
-                        qubit.readout_state(
-                            state[i] if node.parameters.use_state_discrimination else None,
-                            I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
-                            state_st=state_st[i] if node.parameters.use_state_discrimination else None,
-                        )
+                        # -- Fock |1> preparation via f0g1 sideband ladder --------
+                        align()
+                        node.namespace["pair"].fock_prep_qua(1, qubit)
 
-                    align()
-        with stream_processing():
-            n_st.save("n")
-            for i in range(num_qubits):
-                I_st[i].buffer(n_tau).average().save(f"I{i + 1}")
-                Q_st[i].buffer(n_tau).average().save(f"Q{i + 1}")
-                if node.parameters.use_state_discrimination:
-                    state_st[i].buffer(n_tau).average().save(f"state{i + 1}")
+                        # -- Reset qubit to bare GE frequency (n=0) ---------------
+                        align()
+                        qubit.xy.update_frequency(node.namespace["base_qubit_if"])
+
+                        # -- Ramsey: x90 -> wait(tau) -> ±x90 (polarity) ----------
+                        for i, qubit in multiplexed_qubits.items():
+                            align(qubit.xy.name)
+                        with strict_timing_():
+                            for i, qubit in multiplexed_qubits.items():
+                                qubit.xy.play("x90")
+                            for i, qubit in multiplexed_qubits.items():
+                                wait(tau_clk_v, qubit.xy.name)
+                            for i, qubit in multiplexed_qubits.items():
+                                qubit.xy.play("x90", amplitude_scale=polarity)
+
+                        # -- Measure -----------------------------------------------
+                        for i, qubit in multiplexed_qubits.items():
+                            align(qubit.xy.name, qubit.resonator.name)
+                            qubit.readout_state(
+                                state[i] if node.parameters.use_state_discrimination else None,
+                                I=I[i], Q=Q[i], I_st=I_st[i], Q_st=Q_st[i],
+                                state_st=state_st[i] if node.parameters.use_state_discrimination else None,
+                            )
+
+                        align()
+            with stream_processing():
+                n_st.save("n")
+                for i in range(num_qubits):
+                    I_st[i].buffer(n_tau).average().save(f"I{i + 1}")
+                    Q_st[i].buffer(n_tau).average().save(f"Q{i + 1}")
+                    if node.parameters.use_state_discrimination:
+                        state_st[i].buffer(n_tau).average().save(f"state{i + 1}")
+        return prog
+
+    node.namespace["qua_program_plus"]  = _build_program(polarity=+1)
+    node.namespace["qua_program_minus"] = _build_program(polarity=-1)
 
 
 # %% {Simulate}
@@ -213,7 +226,7 @@ def simulate_qua_program(node: QualibrationNode[Parameters, Quam]):
     qmm = node.machine.connect()
     config = node.machine.generate_config()
     samples, fig, wf_report = simulate_and_plot(
-        qmm, config, node.namespace["qua_program"], node.parameters
+        qmm, config, node.namespace["qua_program_plus"], node.parameters
     )
     node.results["simulation"] = {
         "figure": fig, "wf_report": wf_report.to_dict(), "samples": samples
@@ -227,17 +240,24 @@ def simulate_qua_program(node: QualibrationNode[Parameters, Quam]):
 def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
     qmm = node.machine.connect()
     config = node.machine.generate_config()
-    with qm_session(qmm, config, timeout=node.parameters.timeout) as qm:
-        node.namespace["job"] = job = qm.execute(node.namespace["qua_program"])
-        data_fetcher = XarrayDataFetcher(job, node.namespace["sweep_axes"])
-        for dataset in data_fetcher:
-            progress_counter(
-                data_fetcher.get("n", 0),
-                node.parameters.num_shots,
-                start_time=data_fetcher.t_start,
-            )
-        node.log(job.execution_report())
-    node.results["ds_raw"] = dataset
+    n_avg = node.parameters.num_shots
+
+    def _run_polarity(prog, label: str):
+        node.log(f"Executing parity-time Ramsey (polarity {label}) …")
+        with qm_session(qmm, config, timeout=node.parameters.timeout) as qm:
+            job = qm.execute(prog)
+            data_fetcher = XarrayDataFetcher(job, node.namespace["sweep_axes"])
+            for dataset in data_fetcher:
+                progress_counter(
+                    data_fetcher.get("n", 0),
+                    n_avg,
+                    start_time=data_fetcher.t_start,
+                )
+            node.log(job.execution_report())
+        return dataset
+
+    node.results["ds_raw"]       = _run_polarity(node.namespace["qua_program_plus"],  "+1")
+    node.results["ds_raw_minus"] = _run_polarity(node.namespace["qua_program_minus"], "-1")
 
 
 # %% {Load_historical_data}
@@ -253,9 +273,29 @@ def load_data(node: QualibrationNode[Parameters, Quam]):
 # %% {Analyse_data}
 @node.run_action(skip_if=node.parameters.simulate)
 def analyse_data(node: QualibrationNode[Parameters, Quam]):
-    if node.parameters.use_state_discrimination and node.parameters.use_confusion_matrix_correction:
-        node.results["ds_raw"] = apply_confusion_matrix_correction(node.results["ds_raw"], node.namespace["qubits"])
-    node.results["ds_raw"] = process_raw_dataset(node.results["ds_raw"], node)
+    use_sd = node.parameters.use_state_discrimination
+    use_cm = node.parameters.use_confusion_matrix_correction
+    qubits = node.namespace["qubits"]
+
+    def _process(ds):
+        if use_sd and use_cm:
+            ds = apply_confusion_matrix_correction(ds, qubits)
+        return process_raw_dataset(ds, node)
+
+    node.results["ds_raw"] = ds_plus = _process(node.results["ds_raw"])
+
+    ds_raw_minus = node.results.get("ds_raw_minus")
+    if ds_raw_minus is not None:
+        ds_minus = _process(ds_raw_minus)
+        node.results["ds_raw_minus"] = ds_minus
+        # Add parity variables to the plus dataset for the fit
+        signal_prefix = "state" if use_sd else "I"
+        for i in range(len(list(qubits))):
+            var = f"{signal_prefix}{i + 1}"
+            if var in ds_plus.data_vars and var in ds_minus.data_vars:
+                ds_plus[f"parity{i + 1}"] = ds_plus[var] - ds_minus[var]
+        node.results["ds_raw"] = ds_plus
+
     node.results["ds_fit"], fit_results = fit_raw_data(node.results["ds_raw"], node)
     node.results["fit_results"] = {k: asdict(v) for k, v in fit_results.items()}
     log_fitted_results(fit_results, log_callable=node.log)
@@ -300,15 +340,19 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
             pairs = getattr(node.machine, "cavity_transmon_pairs", None)
             if pairs is not None and pair_key in pairs:
                 pairs[pair_key].parity_time = float(res.parity_time_s)
+                if not np.isnan(res.contrast):
+                    pairs[pair_key].parity_contrast = float(res.contrast)
                 # Only write chi if not yet calibrated by another node (e.g. chi_ramsey_stark)
                 if pairs[pair_key].chi is None:
                     pairs[pair_key].chi = -float(res.chi_eff_hz)
                     node.log(f"  chi written: {-res.chi_eff_hz / 1e3:.2f} kHz")
                 else:
                     node.log(f"  chi kept: {pairs[pair_key].chi / 1e3:.2f} kHz (not overwritten)")
+                contrast_str = f"{res.contrast:.4f}" if not np.isnan(res.contrast) else "n/a"
                 node.log(
                     f"Updated {pair_key}.parity_time = {res.parity_time_s * 1e9:.0f} ns  |  "
-                    f"chi = {-res.chi_eff_hz / 1e3:.2f} kHz"
+                    f"chi = {-res.chi_eff_hz / 1e3:.2f} kHz  |  "
+                    f"parity_contrast = {contrast_str}"
                 )
             else:
                 logger.warning(

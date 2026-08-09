@@ -28,9 +28,14 @@ def plot_parity_time(
     mode_name    : str                Cavity mode label for titles.
     """
     n_qubits = len(qubits)
+    has_parity = any(
+        f"parity{i + 1}" in dataset.data_vars or "parity" in dataset.data_vars
+        for i in range(n_qubits)
+    )
+    n_cols = 3 if has_parity else 2
     fig, axes = plt.subplots(
-        n_qubits, 2,
-        figsize=(13, 4.5 * max(n_qubits, 1)),
+        n_qubits, n_cols,
+        figsize=(6.5 * n_cols, 4.5 * max(n_qubits, 1)),
         squeeze=False,
     )
 
@@ -140,6 +145,48 @@ def plot_parity_time(
         ax_fft.set_xlabel("Frequency (kHz)")
         ax_fft.set_ylabel("FFT magnitude (a.u.)")
         ax_fft.set_title(f"{qubit.name} · {mode_name}: FFT spectrum")
+
+        # ── Right-most (optional): parity trace ───────────────────────────────
+        if has_parity:
+            ax_parity = axes[i, 2]
+            parity_raw = None
+            for pkey in [f"parity{i + 1}", "parity"]:
+                if pkey in dataset:
+                    try:
+                        da = dataset[pkey]
+                        parity_raw = (
+                            da.sel(qubit=qubit.name).values
+                            if "qubit" in da.dims
+                            else da.values
+                        )
+                        break
+                    except Exception:
+                        pass
+
+            if parity_raw is not None:
+                parity_raw = np.asarray(parity_raw, dtype=float).ravel()[: len(tau_ns)]
+                ax_parity.plot(tau_us, parity_raw, "o", ms=3, color="mediumpurple",
+                               alpha=0.8, label="P(+1) − P(−1)")
+                ax_parity.axhline(0, color="grey", lw=0.6, ls="--")
+
+                if res is not None and res.success:
+                    tau_parity_us = res.parity_time_s * 1e6
+                    ax_parity.axvline(tau_parity_us, color="forestgreen", lw=1.5, ls="--",
+                                      label=f"τ_parity = {tau_parity_us * 1e3:.0f} ns")
+                    if not np.isnan(res.contrast):
+                        ax_parity.axhline(res.contrast, color="tomato", lw=1.5, ls=":",
+                                          label=f"contrast = {res.contrast:.4f}")
+                        ax_parity.plot(tau_parity_us, res.contrast, "o",
+                                       color="tomato", ms=8, zorder=5)
+
+            ax_parity.set_xlabel("Ramsey wait time (µs)")
+            ax_parity.set_ylabel("Parity (a.u.)")
+            ax_parity.set_title(
+                f"{qubit.name} · {mode_name}: Parity = P(+) − P(−)\n"
+                f"(contrast at τ_parity)"
+            )
+            ax_parity.legend(fontsize=9, loc="lower right")
+            ax_parity.set_ylim(-1.1, 1.1)
 
     fig.tight_layout()
     return fig

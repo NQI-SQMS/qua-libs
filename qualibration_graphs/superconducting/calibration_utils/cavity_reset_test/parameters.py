@@ -33,14 +33,19 @@ class NodeSpecificParameters(RunnableParameters):
     use_confusion_matrix_correction: bool = False
     """Apply ge confusion matrix correction to averaged state probabilities."""
 
-    cavity_pre_reset_type: Literal["thermal", "active_sideband"] = "thermal"
+    cavity_pre_reset_type: Literal["thermal", "active_sideband", "active_sideband_v2"] = "thermal"
     """How to reset the cavity before each shot (before the Fock prep).
-    'thermal'         - wait thermalization_time_factor × T1.
-    'active_sideband' - cascade sideband pi-pulses to actively remove photons."""
+    'thermal'           - wait thermalization_time_factor × T1.
+    'active_sideband'   - cascade sideband pi-pulses to actively remove photons.
+    'active_sideband_v2'- long SB pulse then N×(GEF reset → f0g1 π → GEF reset) per Fock level."""
 
     cavity_active_cooling_fock_n: int = 1
     """Starting Fock level for active sideband pre-reset (only used when
-    cavity_pre_reset_type='active_sideband')."""
+    cavity_pre_reset_type='active_sideband' or 'active_sideband_v2')."""
+
+    cavity_active_cooling_n_repeats: int = 3
+    """Number of (GEF-reset → f0g1-π → GEF-reset) cycles per Fock level.
+    Only used when cavity_pre_reset_type='active_sideband_v2'."""
 
     sideband_pulse_duration_ns: Optional[int] = None
     """Override the sideband pulse flat-top duration [ns] for the Fock-prep step.

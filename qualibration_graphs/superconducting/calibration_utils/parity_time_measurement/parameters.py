@@ -29,14 +29,19 @@ class NodeSpecificParameters(RunnableParameters):
     nÌ" = displacement_k × displacement_scale².
     Keep below 0.5 (OPX amplitude limit)."""
 
-    cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
+    cavity_reset_type: Literal["thermal", "active_sideband", "active_sideband_v2"] = "thermal"
     """How to reset the cavity between shots.
-    'thermal'         — passive decay (thermalization_time × T1).
-    'active_sideband' — f0g1 π-pulse active cooling."""
+    'thermal'           — passive decay (thermalization_time × T1).
+    'active_sideband'   — f0g1 π-pulse active cooling.
+    'active_sideband_v2'— long SB pulse then N×(GEF reset → f0g1 π → GEF reset) per Fock level."""
 
     cavity_active_cooling_fock_n: int = 1
     """Starting Fock level for active sideband cooling
-    (used only when cavity_reset_type='active_sideband')."""
+    (used only when cavity_reset_type='active_sideband' or 'active_sideband_v2')."""
+
+    cavity_active_cooling_n_repeats: int = 3
+    """Number of (GEF-reset → f0g1-π → GEF-reset) cycles per Fock level.
+    Only used when cavity_reset_type='active_sideband_v2'."""
 
     sideband_pulse_duration_ns: Optional[int] = None
     """Override the f0g1 sideband pulse duration [ns] during active cooling.

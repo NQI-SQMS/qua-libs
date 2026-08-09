@@ -14,15 +14,19 @@ class NodeSpecificParameters(RunnableParameters):
     """Number of averages per time point."""
     mode_name: str = "alice"
     """Which cavity mode to probe: 'alice' or 'bob'."""
-    cavity_reset_type: Literal["thermal", "active_sideband"] = "thermal"
+    cavity_reset_type: Literal["thermal", "active_sideband", "active_sideband_v2"] = "thermal"
     """How to reset the cavity before each displacement.
-    'thermal'         — wait thermalization_time_factor × T1 (passive decay).
-    'active_sideband' — drive f0g1 π-pulses to actively remove photons; requires a
-                        calibrated f0g1_pi operation on the sideband_drive of the
-                        corresponding CavityTransmonPair."""
+    'thermal'           — wait thermalization_time_factor × T1 (passive decay).
+    'active_sideband'   — drive f0g1 π-pulses to actively remove photons; requires a
+                          calibrated f0g1_pi operation on the sideband_drive of the
+                          corresponding CavityTransmonPair.
+    'active_sideband_v2'— long SB pulse then N×(GEF reset → f0g1 π → GEF reset) per Fock level."""
     cavity_active_cooling_fock_n: int = 1
     """Starting Fock level for active sideband cooling (only used when
-    cavity_reset_type='active_sideband').  Set to 1 for thermal state cooling."""
+    cavity_reset_type='active_sideband' or 'active_sideband_v2').  Set to 1 for thermal state cooling."""
+    cavity_active_cooling_n_repeats: int = 3
+    """Number of (GEF-reset → f0g1-π → GEF-reset) cycles per Fock level.
+    Only used when cavity_reset_type='active_sideband_v2'."""
     sideband_pulse_duration_ns: Optional[int] = None
     """Override the f0g1 sideband pulse duration [ns] during active cooling.
     When None (default), the calibrated f0g1_pi pulse length is used.

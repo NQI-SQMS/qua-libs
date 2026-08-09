@@ -207,6 +207,20 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                 chi_hz=chi_hz,
                 pair=pair,
             )
+        elif node.parameters.cavity_reset_type == "active_sideband_v2":
+            cavity_mode.reset(
+                "active_sideband_v2",
+                node.parameters.simulate,
+                log_callable=node.log,
+                sideband_drive=sb_drive,
+                qubit=qubit,
+                qubit_thermalization_time=qubit.thermalization_time,
+                fock_n=node.parameters.cavity_active_cooling_fock_n,
+                sideband_pulse_duration_ns=node.parameters.sideband_pulse_duration_ns,
+                chi_hz=chi_hz,
+                pair=pair,
+                n_repeats=node.parameters.cavity_active_cooling_n_repeats,
+            )
         else:
             cavity_mode.cavity_mode_drive.wait(therm_clk)
 

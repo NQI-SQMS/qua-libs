@@ -160,6 +160,11 @@ class ParityTimeFit:
     used_fft_fallback: bool = False
     """True when the damped cosine fit failed and FFT peak was used instead."""
 
+    contrast: float = np.nan
+    """Parity contrast at τ_parity = (state_plus − state_minus) evaluated at t_parity.
+    Ranges in (0, 1] for an ideal measurement; attenuated by T₂ decay, pulse errors, etc.
+    Use this to normalise Wigner parity values: parity_normalised = parity_raw / contrast."""
+
     message: str = ""
     """Human-readable status message."""
 
@@ -280,6 +285,26 @@ def fit_raw_data(
             logger.warning("Damped cosine fit failed for %s, using FFT peak.", qubit.name)
 
         parity_time_s = 1.0 / (2.0 * freq_hz)
+
+        # Contrast from two-polarity parity data (parity{i+1} = state_plus - state_minus)
+        contrast = np.nan
+        for parity_key in [f"parity{i + 1}", "parity"]:
+            if parity_key in dataset:
+                try:
+                    da = dataset[parity_key]
+                    parity_arr = (
+                        da.sel(qubit=qubit.name).values
+                        if "qubit" in da.dims
+                        else da.values
+                    )
+                    parity_arr = np.asarray(parity_arr, dtype=float).ravel()[:n_tau]
+                    t_parity_ns = parity_time_s * 1e9
+                    idx = int(np.argmin(np.abs(tau_ns - t_parity_ns)))
+                    contrast = float(parity_arr[idx])
+                    break
+                except Exception:
+                    pass
+
         fit_results[qubit.name] = ParityTimeFit(
             success=True,
             parity_time_s=parity_time_s,
@@ -289,6 +314,7 @@ def fit_raw_data(
             amplitude=fft_amp,
             fit_curve=fit_curve,
             used_fft_fallback=used_fft,
+            contrast=contrast,
             message=message,
         )
 
@@ -311,7 +337,9 @@ def log_fitted_results(
         method = "FFT" if res.used_fft_fallback else "fit"
         err_str = f" ± {res.chi_eff_err_hz / 1e3:.2f} kHz" if not np.isnan(res.chi_eff_err_hz) else ""
         T2_str = f"  T2 = {res.T2_s * 1e6:.1f} µs" if not np.isnan(res.T2_s) else ""
+        contrast_str = f"  |  contrast = {res.contrast:.4f}" if not np.isnan(res.contrast) else ""
         log_callable(
             f"{qname} [{method}]: χ_eff/(2π) = {res.chi_eff_hz / 1e3:.2f}{err_str} kHz"
             f"{T2_str}  |  τ_parity = {res.parity_time_s * 1e9:.0f} ns"
+            f"{contrast_str}"
         )
