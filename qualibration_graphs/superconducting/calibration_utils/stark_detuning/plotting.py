@@ -23,13 +23,13 @@ def plot_raw_data_with_fit(ds: xr.Dataset, qubits: List[AnyTransmon], fits: xr.D
 
 def plot_individual_data_with_fit(ax: Axes, ds: xr.Dataset, qubit: dict[str, str], fit: xr.Dataset = None):
     if hasattr(fit, "state"):
-        fit.assign_coords(detuning_MHz=fit.detuning / u.MHz).state.plot(
+        fit.assign_coords(detuning_MHz=fit.full_detuning / u.MHz).state.plot(
             ax=ax, x="detuning_MHz", y="nb_of_pulses"
         )
         ax.set_ylabel("State population")
         ax.set_title(qubit["qubit"] + " - state population")
     elif hasattr(fit, "I"):
-        (fit.assign_coords(detuning_MHz=fit.detuning / u.MHz).I * 1e3).plot(
+        (fit.assign_coords(detuning_MHz=fit.full_detuning / u.MHz).I * 1e3).plot(
             ax=ax, x="detuning_MHz", y="nb_of_pulses"
         )
         ax.set_ylabel("Trans. amp. I [mV]")

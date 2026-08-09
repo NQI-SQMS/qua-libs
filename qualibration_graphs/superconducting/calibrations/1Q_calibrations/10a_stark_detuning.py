@@ -73,13 +73,14 @@ def custom_param(node: QualibrationNode[Parameters, Quam]):
 # node.machine = Quam.load()
 
 
-def check_sweep_within_bounds(qubits, dfs):
+def check_sweep_within_bounds(qubits, dfs, base_detunings):
     invalid_qubits = []
     max_freq = 400e6
 
     for qubit in qubits:
-        sweep_min = (dfs + qubit.xy.intermediate_frequency).min()
-        sweep_max = (dfs + qubit.xy.intermediate_frequency).max()
+        center = qubit.xy.intermediate_frequency + base_detunings[qubit.name]
+        sweep_min = (dfs + center).min()
+        sweep_max = (dfs + center).max()
         if sweep_min < -max_freq or sweep_max > max_freq:
             invalid_qubits.append((qubit.name, qubit.xy.intermediate_frequency, sweep_min, sweep_max))
     if invalid_qubits:
@@ -101,10 +102,16 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     num_qubits = len(qubits)
     operation = node.parameters.operation
 
+    # The frequency sweep is centered around the detuning already set on the operation (e.g. from a
+    # previous stark-detuning calibration), not around the bare qubit intermediate frequency. That
+    # pre-existing detuning is captured here before it gets reset to 0 for the duration of the sweep.
     node.namespace["tracked_qubits"] = []
+    node.namespace["base_detunings"] = base_detunings = {}
     for q in qubits:
+        qubit_name = q.name
         with tracked_updates(q, auto_revert=False, dont_assign_to_none=True) as q:
             cur_op = q.xy.operations[node.parameters.operation]
+            base_detunings[qubit_name] = int(cur_op.detuning or 0)
             if node.parameters.alpha_setpoint is not None:
                 cur_op.alpha = node.parameters.alpha_setpoint
             cur_op.detuning = 0
@@ -114,7 +121,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     span = node.parameters.frequency_span_in_mhz * u.MHz
     step = node.parameters.frequency_step_in_mhz * u.MHz
     dfs = np.arange(-span // 2, +span // 2, step, dtype=np.int32)
-    check_sweep_within_bounds(qubits, dfs)
+    check_sweep_within_bounds(qubits, dfs, base_detunings)
 
     N_pi = node.parameters.max_number_pulses_per_sweep
     N_pi_vec = np.linspace(1, N_pi, N_pi).astype("int")
@@ -122,7 +129,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     node.namespace["sweep_axes"] = {
         "qubit": xr.DataArray(qubits.get_names()),
         "nb_of_pulses": xr.DataArray(N_pi_vec, attrs={"long_name": "number of pulses"}),
-        "detuning": xr.DataArray(dfs, attrs={"long_name": "pulse detuning", "units": "Hz"}),
+        "detuning": xr.DataArray(
+            dfs, attrs={"long_name": "pulse detuning relative to the pre-existing operation detuning", "units": "Hz"}
+        ),
     }
 
     with program() as node.namespace["qua_program"]:
@@ -150,7 +159,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         align()
 
                         for i, qubit in multiplexed_qubits.items():
-                            qubit.xy.update_frequency(df + qubit.xy.intermediate_frequency)
+                            qubit.xy.update_frequency(
+                                df + qubit.xy.intermediate_frequency + base_detunings[qubit.name]
+                            )
                             with for_(count, 0, count < npi, count + 1):
                                 if node.parameters.operation == "x180":
                                     qubit.xy.play(operation)
@@ -212,6 +223,11 @@ def execute_qua_program(node: QualibrationNode[Parameters, Quam]):
                 start_time=data_fetcher.t_start,
             )
         node.log(job.execution_report())
+    base_detunings = node.namespace["base_detunings"]
+    dataset = dataset.assign_coords(
+        base_detuning=("qubit", [base_detunings[name] for name in dataset.qubit.values])
+    )
+    dataset.base_detuning.attrs = {"long_name": "pre-existing operation detuning", "units": "Hz"}
     node.results["ds_raw"] = dataset
 
 

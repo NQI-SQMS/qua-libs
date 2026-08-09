@@ -78,6 +78,9 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
             length=new_length,
             threshold=None,
             rus_exit_threshold=None,
+            # Keep this a live reference (not the resolved value from `readout_pulse`) so
+            # integration weights keep tracking `.length` instead of freezing at creation time.
+            integration_weights="#./default_integration_weights",
         )
 
     n_avg = node.parameters.num_shots
@@ -87,9 +90,13 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     sin_w = node.parameters.sin_weight_name
     minus_sin_w = node.parameters.minus_sin_weight_name
 
-    # Temporarily extend the readout pulse to the requested maximum length
+    # Temporarily extend the readout pulse to the requested maximum length. Also reset
+    # integration_weights back to the live reference in case it was frozen to a stale value
+    # by an earlier run (e.g. before this bug was fixed).
     for qubit in qubits:
-        qubit.resonator.operations[readout_op].length = node.parameters.max_readout_length_in_ns
+        pulse = qubit.resonator.operations[readout_op]
+        pulse.length = node.parameters.max_readout_length_in_ns
+        pulse.integration_weights = "#./default_integration_weights"
 
     first_qubit = list(qubits)[0]
     readout_length_ns = first_qubit.resonator.operations[readout_op].length

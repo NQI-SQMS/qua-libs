@@ -33,6 +33,12 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, node.namespace["qubits"])
+    if "base_detuning" not in ds.coords:
+        # Backwards compatibility with datasets saved before the sweep was centered on the
+        # pre-existing operation detuning.
+        ds = ds.assign_coords(base_detuning=("qubit", np.zeros(ds.sizes["qubit"])))
+    ds = ds.assign_coords(full_detuning=ds["detuning"] + ds["base_detuning"])
+    ds.full_detuning.attrs = {"long_name": "absolute pulse detuning", "units": "Hz"}
     return ds
 
 
@@ -42,7 +48,7 @@ def fit_raw_data(ds: xr.Dataset, node: QualibrationNode) -> Tuple[xr.Dataset, di
         ds_fit["averaged_data"] = ds.state.mean(dim="nb_of_pulses")
     else:
         ds_fit["averaged_data"] = ds.I.mean(dim="nb_of_pulses")
-    ds_fit["optimal_detuning"] = ds.detuning.isel(detuning=ds_fit["averaged_data"].argmin("detuning"))
+    ds_fit["optimal_detuning"] = ds.full_detuning.isel(detuning=ds_fit["averaged_data"].argmin("detuning"))
 
     fit_data, fit_results = _extract_relevant_fit_parameters(ds_fit, node)
     return fit_data, fit_results
