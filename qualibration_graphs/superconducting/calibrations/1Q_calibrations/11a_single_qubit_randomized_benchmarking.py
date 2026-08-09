@@ -24,7 +24,6 @@ from qualibration_libs.parameters import get_qubits
 from qualibration_libs.runtime import simulate_and_plot
 from qualibration_libs.data import XarrayDataFetcher
 
-
 # %% {Node initialisation}
 description = """
         SINGLE QUBIT RANDOMIZED BENCHMARKING
@@ -59,6 +58,7 @@ node = QualibrationNode[Parameters, Quam](
     name="11a_single_qubit_randomized_benchmarking",
     description=description,
     parameters=Parameters(),
+    machine=Quam.load(),
 )
 
 
@@ -69,10 +69,6 @@ def custom_param(node: QualibrationNode[Parameters, Quam]):
     # You can get type hinting in your IDE by typing node.parameters.
     # node.parameters.qubits = ["q1", "q2"]
     pass
-
-
-# Instantiate the QUAM class from the state file
-node.machine = Quam.load()
 
 
 # %% {Create_QUA_program}

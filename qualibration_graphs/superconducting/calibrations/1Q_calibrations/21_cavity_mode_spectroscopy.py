@@ -159,10 +159,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                                 cavity_mode.cavity_mode_drive.play(op, amplitude_scale=amp_factor)
                             # NO qubit probe pulse here.
                             align()
-                            qubit.resonator.measure("readout", qua_vars=(I_base[i], Q_base[i]))
-                            save(I_base[i], I_base_st[i])
-                            save(Q_base[i], Q_base_st[i])
-                            qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                            qubit.readout_state(None, I=I_base[i], Q=Q_base[i], I_st=I_base_st[i], Q_st=Q_base_st[i])
 
                         # ====================================================
                         # PART 2 -- SIGNAL (always executed)

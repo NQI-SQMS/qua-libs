@@ -339,15 +339,8 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
 
                     # 5. Readout
                     align()
-                    qubit.resonator.measure("readout", qua_vars=(I, Q))
-                    if node.parameters.use_state_discrimination:
-                        _thresh = displaced_threshold if displaced_threshold is not None else qubit.resonator.operations["readout"].threshold
-                        assign(state, Cast.to_int(I > _thresh))
-                        save(state, state_st)
-                    else:
-                        assign(state, Cast.to_int(I > 0))
-                        save(state, state_st)
-                    qubit.resonator.wait(qubit.resonator.depletion_time // 4)
+                    _thresh = (displaced_threshold if displaced_threshold is not None else None) if node.parameters.use_state_discrimination else 0
+                    qubit.readout_state(state, I=I, Q=Q, state_st=state_st, threshold=_thresh)
 
             with stream_processing():
                 n_st.save("n")

@@ -24,7 +24,6 @@ from qualibration_libs.runtime import simulate_and_plot
 from qualibration_libs.data import XarrayDataFetcher
 from qualibration_libs.core import tracked_updates
 
-
 # %% {Node initialisation}
 description = """
         DRAG PULSE CALIBRATION (GOOGLE METHOD)
@@ -52,6 +51,7 @@ node = QualibrationNode[Parameters, Quam](
     name="10b_drag_calibration_180_minus_180",
     description=description,
     parameters=Parameters(),
+    machine=Quam.load(),
 )
 
 
@@ -62,10 +62,6 @@ def custom_param(node: QualibrationNode[Parameters, Quam]):
     # You can get type hinting in your IDE by typing node.parameters.
     # node.parameters.qubits = ["q1", "q2"]
     pass
-
-
-# Instantiate the QUAM class from the state file
-node.machine = Quam.load()
 
 
 # %% {Create_QUA_program}

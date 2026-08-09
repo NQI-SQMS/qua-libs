@@ -6,12 +6,12 @@ import xarray as xr
 
 from qualibrate import QualibrationNode
 from qualibration_libs.data import convert_IQ_to_V
-try:
-    from qualibration_libs.data import apply_confusion_correction_to_dataset
-except ImportError:
-    def apply_confusion_correction_to_dataset(ds, node):
-        raise NotImplementedError("apply_confusion_correction_to_dataset not available in this qualibration_libs version")
 from qualibration_libs.analysis import fit_decay_exp
+from calibration_utils.shared import apply_confusion_matrix_correction
+
+
+def apply_confusion_correction_to_dataset(ds, node):
+    return apply_confusion_matrix_correction(ds, node.namespace["qubits"])
 
 
 @dataclass
@@ -49,6 +49,7 @@ def log_fitted_results(fit_results: Dict, log_callable=None):
 
 
 def process_raw_dataset(ds: xr.Dataset, node: QualibrationNode):
+    """Convert I/Q to Volts, or build a 'state' DataArray from stateN variables."""
     if not node.parameters.use_state_discrimination:
         ds = convert_IQ_to_V(ds, node.namespace["qubits"])
     else:

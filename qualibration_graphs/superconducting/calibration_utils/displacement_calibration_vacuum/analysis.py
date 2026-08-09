@@ -29,11 +29,11 @@ from scipy.optimize import curve_fit
 from qualibrate import QualibrationNode
 from calibration_utils.error_codes import DisplacementVacuumErrorCode
 from qualibration_libs.data import convert_IQ_to_V
-try:
-    from qualibration_libs.data import apply_confusion_correction_to_dataset
-except ImportError:
-    def apply_confusion_correction_to_dataset(ds, node):
-        raise NotImplementedError("apply_confusion_correction_to_dataset not available in this qualibration_libs version")
+from calibration_utils.shared import apply_confusion_matrix_correction
+
+
+def apply_confusion_correction_to_dataset(ds, node):
+    return apply_confusion_matrix_correction(ds, node.namespace["qubits"])
 
 
 @dataclass

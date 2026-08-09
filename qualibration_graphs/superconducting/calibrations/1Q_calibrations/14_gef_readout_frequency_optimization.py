@@ -301,9 +301,10 @@ def update_state(node: QualibrationNode[Parameters, Quam]):
         for q in node.namespace["qubits"]:
             if node.outcomes[q.name] == "failed":
                 continue
-            node.machine.qubits[q.name].resonator.GEF_frequency_shift += node.results["fit_results"][q.name][
-                "optimal_detuning"
-            ]
+            resonator = node.machine.qubits[q.name].resonator
+            if resonator.GEF_frequency_shift is None:
+                resonator.GEF_frequency_shift = 0.0
+            resonator.GEF_frequency_shift += node.results["fit_results"][q.name]["optimal_detuning"]
 
 
 # %% {Save_results}
