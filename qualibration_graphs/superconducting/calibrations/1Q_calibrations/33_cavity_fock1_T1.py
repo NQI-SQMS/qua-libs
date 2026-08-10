@@ -215,13 +215,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             # |g,0> unchanged            if photon decayed
                             align(sideband_drive.name, qubit.xy.name, qubit.resonator.name)
                             sideband_drive.update_frequency(target_if_0)
-                            with strict_timing_():
-                                sideband_drive.play("sideband_ramp_up")
-                                if flat_top_clk_0 is not None:
-                                    sideband_drive.play("sideband_square", duration=flat_top_clk_0)
-                                else:
-                                    sideband_drive.play("sideband_square")
-                                sideband_drive.play("sideband_ramp_down")
+                            pair.play_sideband_flattop(flat_top_duration_clk=flat_top_clk_0)
                             align(sideband_drive.name, qubit.xy.name)
                             qubit.xy.update_frequency(ef_if_0)
                             qubit.xy.play("EF_x180")
@@ -232,18 +226,11 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                             n1_if = pair.ge_if_at_fock(qubit, 1)
 
                             # -- 2b. Fock |1> prep: D(alpha1) -> SNAP₀ -> D(alpha2)
-                            align(qubit.xy.name, cavity_mode.cavity_mode_drive.name, qubit.resonator.name)
-                            cavity_mode.cavity_mode_drive.play(
-                                "displacement", amplitude_scale=node.namespace["amp_scale1"]
+                            cavity_mode.displacement(amplitude=node.namespace["amp_scale1"])
+                            cavity_mode.snap_gate.apply_single(
+                                fock_level=0, theta=np.pi, pair=pair, qubit=qubit
                             )
-                            align(qubit.xy.name, cavity_mode.cavity_mode_drive.name)
-                            qubit.xy.update_frequency(qubit_IF)
-                            qubit.xy.play("selective_x180")  # SNAP₀: two selective pi pulses
-                            qubit.xy.play("selective_x180")  # apply pi phase to |n=0> component
-                            align(qubit.xy.name, cavity_mode.cavity_mode_drive.name)
-                            cavity_mode.cavity_mode_drive.play(
-                                "displacement", amplitude_scale=node.namespace["amp_scale2"]
-                            )
+                            cavity_mode.displacement(amplitude=node.namespace["amp_scale2"])
                             align(qubit.xy.name, cavity_mode.cavity_mode_drive.name, qubit.resonator.name)
 
                             # -- 3b. Wait tau ----------------------------------
