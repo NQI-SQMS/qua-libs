@@ -68,7 +68,7 @@ State updates
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="28_parity_time_measurement",
+    name="09_parity_time_measurement",
     description=description,
     parameters=Parameters(),
 )

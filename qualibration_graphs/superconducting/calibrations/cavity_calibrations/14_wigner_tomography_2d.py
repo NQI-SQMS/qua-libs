@@ -73,7 +73,7 @@ Prerequisites:
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="36_wigner_tomography_2d",
+    name="14_wigner_tomography_2d",
     description=description,
     parameters=Parameters(),
 )
@@ -123,7 +123,7 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
     qubit_list = list(qubits)
     if len(qubit_list) != 1:
         raise ValueError(
-            f"36_wigner_tomography_2d expects exactly one qubit, got {len(qubit_list)}."
+            f"14_wigner_tomography_2d expects exactly one qubit, got {len(qubit_list)}."
         )
     qubit = qubit_list[0]
     node.namespace["qubit"] = qubit

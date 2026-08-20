@@ -61,7 +61,7 @@ State update:
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="24_photon_number_resolved_spectroscopy",
+    name="05_photon_number_resolved_spectroscopy",
     description=description,
     parameters=Parameters(),
 )

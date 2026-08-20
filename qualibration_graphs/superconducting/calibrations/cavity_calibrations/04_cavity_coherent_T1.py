@@ -71,7 +71,7 @@ State updates:
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="23_cavity_coherent_T1",
+    name="04_cavity_coherent_T1",
     description=description,
     parameters=Parameters(),
 )

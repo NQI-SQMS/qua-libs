@@ -67,7 +67,7 @@ QuAM state update: on success, saves t95 [ns] to
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="35_cavity_reset_test",
+    name="13_cavity_reset_test",
     description=description,
     parameters=Parameters(),
 )
@@ -198,35 +198,20 @@ def create_qua_program(node: QualibrationNode[Parameters, Quam]):
                         qubit.xy.play("EF_x180")       # ef pi  →  |f,0⟩
                         align(qubit.xy.name, sideband_drive.name)
                         sideband_drive.update_frequency(target_if_0)
-                        with strict_timing_():
-                            sideband_drive.play("sideband_ramp_up")
-                            if flat_top_clk_0 is not None:
-                                sideband_drive.play("sideband_square", duration=flat_top_clk_0)
-                            else:
-                                sideband_drive.play("sideband_square")
-                            sideband_drive.play("sideband_ramp_down")
+                        pair.play_sideband_flattop(flat_top_duration_clk=flat_top_clk_0)
                         # Cavity now in |1⟩, qubit back to |g⟩
                         align(sideband_drive.name, qubit.xy.name, qubit.resonator.name)
 
                         # -- 3. Apply reset drive for variable duration t ---------
                         sideband_drive.update_frequency(target_if_0)
-                        with strict_timing_():
-                            sideband_drive.play("sideband_ramp_up")
-                            sideband_drive.play("sideband_square", duration=t)  # swept
-                            sideband_drive.play("sideband_ramp_down")
+                        pair.play_sideband_flattop(flat_top_duration_clk=t)  # t is swept
                         align(sideband_drive.name, qubit.xy.name, qubit.resonator.name)
 
                         # -- 4. Inverse sideband readout --------------------------
                         # |g,1⟩ → |f,0⟩ → |e,0⟩  if photon survived (reset failed)
                         # |g,0⟩ unchanged            if reset succeeded
                         sideband_drive.update_frequency(target_if_0)
-                        with strict_timing_():
-                            sideband_drive.play("sideband_ramp_up")
-                            if flat_top_clk_0 is not None:
-                                sideband_drive.play("sideband_square", duration=flat_top_clk_0)
-                            else:
-                                sideband_drive.play("sideband_square")
-                            sideband_drive.play("sideband_ramp_down")
+                        pair.play_sideband_flattop(flat_top_duration_clk=flat_top_clk_0)
                         align(sideband_drive.name, qubit.xy.name)
                         qubit.xy.update_frequency(ef_if_0)
                         qubit.xy.play("EF_x180")

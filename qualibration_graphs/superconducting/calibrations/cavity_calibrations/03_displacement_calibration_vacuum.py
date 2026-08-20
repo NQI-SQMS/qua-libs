@@ -76,7 +76,7 @@ State updates:
 """
 
 node = QualibrationNode[Parameters, Quam](
-    name="22_displacement_calibration_vacuum",
+    name="03_displacement_calibration_vacuum",
     description=description,
     parameters=Parameters(),
 )
