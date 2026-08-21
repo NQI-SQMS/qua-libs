@@ -127,20 +127,15 @@ Exponential decay of the |1⟩ Fock state, giving T₁ ≈ 5.0 ms.
 
 <img src="../.img/cavity_fock1_T1.png" width="700" alt="Fock state |1> T1 decay">
 
-### Fock |1⟩ T₂ (node 12)
-T₂ of the |1⟩ Fock state measured via Ramsey-style experiment.
-
-<img src="../.img/cavity_fock1_T2.png" width="700" alt="Fock state |1> T2 Ramsey">
-
 ### Parity-time calibration (node 09)
 Calibrates χ_eff and t_parity from the qubit Ramsey frequency while the cavity holds a |1⟩ Fock state.
 
 <img src="../.img/parity_time_measurement.png" width="700" alt="Parity-time Ramsey showing oscillation at chi_eff with fit">
 
 ### Wigner tomography 2D (node 14)
-Full 2D Wigner function reconstruction of a |1⟩ Fock state: measured raw W(α), reconstructed W(β) via MLE, and photon-number distribution.
+Full 2D Wigner function reconstruction of a |1⟩ Fock state: measured raw W(α), reconstructed W(β) via MLE, photon-number distribution, and parity-corrected fidelity (F=93.86%, p₁₁=0.405, contrast pc=0.890).
 
-<img src="../.img/wigner_tomography.png" width="900" alt="2D Wigner tomography of Fock |1> state: raw, reconstructed, and photon statistics">
+<img src="../.img/wigner_tomography.png" width="900" alt="2D Wigner tomography of Fock |1> state: raw, reconstructed, photon statistics, parity corrected F=93.86%">
 
 ---
 
